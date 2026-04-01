@@ -43,6 +43,11 @@ enum AnnotationKind {
   STAMP
 }
 
+enum EditorElementKind {
+  TEXT
+  IMAGE
+}
+
 enum SignatureRequestStatus {
   DRAFT
   SENT
@@ -80,6 +85,7 @@ enum ActivityType {
   DOCUMENT_VERSION_CREATED
   ANNOTATION_CREATED
   ANNOTATION_UPDATED
+  PAGE_ORGANIZER_OPERATION_CREATED
   SIGNATURE_REQUESTED
   SIGNATURE_COMPLETED
   OCR_REQUESTED
@@ -148,12 +154,47 @@ model Document {
   versions         DocumentVersion[] @relation("DocumentVersions")
   pageArtifacts    PageArtifact[]
   annotations      Annotation[]
+  editorElements   EditorElement[]
   signatureRequest SignatureRequest[]
   formFields       FormField[]
   comments         Comment[]
   ocrJobs          OcrJob[]
+  pageOrganizerOperations PageOrganizerOperation[]
   activityEvents   ActivityEvent[]
 
+  @@index([organizationId, createdAt])
+}
+
+model EditorElement {
+  id             String            @id @default(cuid())
+  organizationId String
+  documentId     String
+  pageNumber     Int
+  kind           EditorElementKind
+  payloadJson    Json
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, pageNumber])
+  @@index([organizationId, createdAt])
+}
+
+model PageOrganizerOperation {
+  id             String   @id @default(cuid())
+  organizationId String
+  documentId     String
+  operation      String
+  payloadJson    Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, createdAt])
   @@index([organizationId, createdAt])
 }
 
