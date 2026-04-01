@@ -3,20 +3,42 @@
 import { useEffect, useRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
+import {
+  AnnotationOverlay,
+} from "@/features/annotation/components/annotation-overlay";
+import type { AnnotationEntity } from "@/features/annotation/domain/annotation";
+import type { AnnotationKind } from "@/features/annotation/domain/annotation";
+
 interface PdfCanvasPageProps {
   page: PDFPageProxy | null;
+  pageNumber: number;
   scale: number;
   className?: string;
   onVisible?: () => void;
   showTextLayer?: boolean;
+  annotations?: AnnotationEntity[];
+  selectedAnnotationId?: string | null;
+  activeTool?: "SELECT" | "HIGHLIGHT" | "NOTE";
+  onCreateAnnotation?: (
+    pageNumber: number,
+    kind: AnnotationKind,
+    rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
+  ) => void;
+  onSelectAnnotation?: (annotationId: string | null) => void;
 }
 
 export function PdfCanvasPage({
   page,
+  pageNumber,
   scale,
   className,
   onVisible,
   showTextLayer = false,
+  annotations = [],
+  selectedAnnotationId = null,
+  activeTool = "SELECT",
+  onCreateAnnotation,
+  onSelectAnnotation,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +114,16 @@ export function PdfCanvasPage({
             ref={textLayerRef}
             className="pointer-events-none absolute inset-0 rounded bg-transparent"
             aria-hidden="true"
+          />
+        ) : null}
+        {onCreateAnnotation && onSelectAnnotation ? (
+          <AnnotationOverlay
+            pageNumber={pageNumber}
+            annotations={annotations}
+            selectedAnnotationId={selectedAnnotationId}
+            activeTool={activeTool}
+            onCreateAnnotation={onCreateAnnotation}
+            onSelectAnnotation={onSelectAnnotation}
           />
         ) : null}
       </div>

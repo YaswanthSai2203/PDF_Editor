@@ -15,6 +15,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { AnnotationToolbar } from "@/features/annotation/components/annotation-toolbar";
+import type { AnnotationKind } from "@/features/annotation/domain/annotation";
+import { useAnnotationStore } from "@/features/annotation/services/annotation-store";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
@@ -50,6 +53,17 @@ function hasPageLoaded(
 
 export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
+  const annotationsByDocument = useAnnotationStore(
+    (state) => state.annotationsByDocument,
+  );
+  const selectedAnnotationId = useAnnotationStore(
+    (state) => state.selectedAnnotationId,
+  );
+  const activeTool = useAnnotationStore((state) => state.activeTool);
+  const setActiveTool = useAnnotationStore((state) => state.setActiveTool);
+  const selectAnnotation = useAnnotationStore((state) => state.selectAnnotation);
+  const createAnnotation = useAnnotationStore((state) => state.createAnnotation);
+  const deleteAnnotation = useAnnotationStore((state) => state.deleteAnnotation);
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<Record<number, PDFPageProxy>>({});
@@ -221,6 +235,12 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const canGoForward = totalPages > 0 && pageNumber < totalPages;
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
+  const documentKey = sourceUrl;
+  const allCurrentDocumentAnnotations =
+    annotationsByDocument[documentKey] ?? [];
+  const canDeleteSelection = allCurrentDocumentAnnotations.some(
+    (item) => item.id === selectedAnnotationId,
+  );
 
   function scrollToPage(targetPageNumber: number) {
     const boundedPageNumber = Math.max(1, Math.min(targetPageNumber, totalPages || 1));
@@ -232,6 +252,26 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       );
       pageElement?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  }
+
+  function handleCreateAnnotation(
+    targetPageNumber: number,
+    kind: AnnotationKind,
+    rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
+  ) {
+    createAnnotation({
+      documentKey,
+      pageNumber: targetPageNumber,
+      kind,
+      rect,
+    });
+  }
+
+  function handleDeleteSelection() {
+    if (!selectedAnnotationId) {
+      return;
+    }
+    deleteAnnotation(documentKey, selectedAnnotationId);
   }
 
   return (
@@ -284,6 +324,12 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          <AnnotationToolbar
+            activeTool={activeTool}
+            onToolChange={setActiveTool}
+            canDeleteSelection={canDeleteSelection}
+            onDeleteSelection={handleDeleteSelection}
+          />
           <Button
             size="icon"
             variant="outline"
@@ -384,9 +430,17 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                 </div>
                 <PdfCanvasPage
                   page={pages[renderPageNumber] ?? null}
+                  pageNumber={renderPageNumber}
                   scale={fitMode === "page" ? Math.min(scale, 1.2) : scale}
                   onVisible={() => setPageNumber(renderPageNumber)}
                   showTextLayer={showTextLayer}
+                  annotations={allCurrentDocumentAnnotations.filter(
+                    (item) => item.pageNumber === renderPageNumber,
+                  )}
+                  selectedAnnotationId={selectedAnnotationId}
+                  activeTool={activeTool}
+                  onCreateAnnotation={handleCreateAnnotation}
+                  onSelectAnnotation={selectAnnotation}
                 />
               </div>
             ))}
