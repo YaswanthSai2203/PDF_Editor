@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  FileSignature,
   GripVertical,
   Image as ImageIcon,
   Link2,
@@ -44,6 +45,19 @@ import {
   fetchPageOperations,
 } from "@/features/page-organizer/services/page-organizer-api";
 import { usePageOrganizerStore } from "@/features/page-organizer/services/page-organizer-store";
+import { FormsPanel } from "@/features/forms/components/forms-panel";
+import type {
+  FormFieldEntity,
+  FormFieldType,
+} from "@/features/forms/domain/form-field";
+import {
+  createFormFieldOnServer,
+  deleteFormFieldOnServer,
+  fetchFormFields,
+  submitFormValuesOnServer,
+  updateFormFieldOnServer,
+} from "@/features/forms/services/forms-api";
+import { useFormsStore } from "@/features/forms/services/forms-store";
 import { SignaturePanel } from "@/features/signature/components/signature-panel";
 import type {
   CreateSignatureRequestInput,
@@ -193,6 +207,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(false);
   const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(false);
+  const [showFormsPanel, setShowFormsPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -240,6 +255,15 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const updateSignatureRequestStatus = useSignatureStore((state) => state.updateRequestStatus);
   const getSelectedSignatureRequest = useSignatureStore((state) => state.getSelectedRequest);
   const selectSignatureRequest = useSignatureStore((state) => state.selectRequest);
+  const formFieldsByDocument = useFormsStore((state) => state.fieldsByDocument);
+  const selectedFormFieldId = useFormsStore((state) => state.selectedFieldIdByDocument[documentKey] ?? null);
+  const setDocumentFormFields = useFormsStore((state) => state.setDocumentFields);
+  const createLocalFormField = useFormsStore((state) => state.createLocalField);
+  const replaceFormField = useFormsStore((state) => state.replaceField);
+  const deleteFormField = useFormsStore((state) => state.deleteField);
+  const selectFormField = useFormsStore((state) => state.selectField);
+  const setFormFieldValue = useFormsStore((state) => state.setFieldValue);
+  const clearFormFieldValue = useFormsStore((state) => state.clearFieldValue);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -374,6 +398,30 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   }, [documentKey, persistedDocumentId, setSignatureRequests]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentFormFields(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchFormFields(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setDocumentFormFields(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load form fields.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setDocumentFormFields]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
@@ -491,6 +539,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const allCurrentDocumentEditorElements = editorElementsByDocument[documentKey] ?? [];
   const allCurrentDocumentSignatureRequests =
     signatureRequestsByDocument[documentKey] ?? [];
+  const allCurrentDocumentFormFields = formFieldsByDocument[documentKey] ?? [];
   const selectedSignatureRequest =
     getSelectedSignatureRequest(documentKey) ?? null;
   const canDeleteEditorSelection = allCurrentDocumentEditorElements.some(
@@ -612,6 +661,123 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       .catch(() => {
         setError("Failed to create signature request on server.");
       });
+  }
+
+  function handleCreateFormField(input: {
+    pageNumber: number;
+    name: string;
+    fieldType: FormFieldType;
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before creating form fields.");
+      return;
+    }
+
+    const local = createLocalFormField(documentKey, {
+      documentId: persistedDocumentId,
+      documentKey,
+      persistedDocumentId: persistedDocumentId,
+      persisted: false,
+      pageNumber: input.pageNumber,
+      name: input.name,
+      fieldType: input.fieldType,
+      rect: {
+        xPct: 12,
+        yPct: 20,
+        widthPct: 24,
+        heightPct: 7,
+      },
+      required: false,
+      label: input.name,
+      value: "",
+    });
+
+    void createFormFieldOnServer({
+      documentId: persistedDocumentId,
+      documentKey,
+      field: {
+        documentId: persistedDocumentId,
+        pageNumber: input.pageNumber,
+        name: input.name,
+        fieldType: input.fieldType,
+        rect: {
+          xPct: 12,
+          yPct: 20,
+          widthPct: 24,
+          heightPct: 7,
+        },
+        required: false,
+      },
+    })
+      .then((saved) => {
+        replaceFormField(documentKey, local.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to create form field on server.");
+      });
+  }
+
+  function handleUpdateFormField(
+    fieldId: string,
+    updates: {
+      name?: string;
+      required?: boolean;
+      rect?: {
+        xPct: number;
+        yPct: number;
+        widthPct: number;
+        heightPct: number;
+      };
+    },
+  ) {
+    const target = allCurrentDocumentFormFields.find((field) => field.id === fieldId);
+    if (!target || !target.documentId) {
+      return;
+    }
+    const merged: FormFieldEntity = {
+      ...target,
+      ...updates,
+      ...(updates.rect ? { rect: updates.rect } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    replaceFormField(documentKey, fieldId, merged);
+
+    void updateFormFieldOnServer(fieldId, {
+      name: updates.name,
+      required: updates.required,
+      rect: updates.rect,
+    }).catch(() => {
+      setError("Failed to update form field on server.");
+    });
+  }
+
+  function handleSubmitFormFieldValue(fieldId: string, value: string) {
+    const target = allCurrentDocumentFormFields.find((field) => field.id === fieldId);
+    if (!target) {
+      return;
+    }
+    setFormFieldValue(documentKey, fieldId, value);
+    if (!target.documentId) {
+      return;
+    }
+    void submitFormValuesOnServer(fieldId, value).catch(() => {
+      setError("Failed to save form field value.");
+    });
+  }
+
+  function handleDeleteFormField(fieldId: string) {
+    const target = allCurrentDocumentFormFields.find((field) => field.id === fieldId);
+    if (!target) {
+      return;
+    }
+    deleteFormField(documentKey, fieldId);
+    clearFormFieldValue(documentKey, fieldId);
+    if (!target.persisted) {
+      return;
+    }
+    void deleteFormFieldOnServer(fieldId).catch(() => {
+      setError("Failed to delete form field.");
+    });
   }
 
   function handleUpdateSignatureRequest(
@@ -995,6 +1161,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               <Signature className="mr-1 h-4 w-4" />
               Sign
             </Button>
+            <Button
+              size="sm"
+              variant={showFormsPanel ? "secondary" : "ghost"}
+              onClick={() => setShowFormsPanel((current) => !current)}
+            >
+              <FileSignature className="mr-1 h-4 w-4" />
+              Forms
+            </Button>
           </div>
 
           <Button
@@ -1062,13 +1236,19 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       <div
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
-          showOrganizerPanel && showSignaturePanel
-            ? "md:grid-cols-[220px_1fr_320px_360px]"
-            : showOrganizerPanel
-              ? "md:grid-cols-[220px_1fr_320px]"
-              : showSignaturePanel
-                ? "md:grid-cols-[220px_1fr_360px]"
-                : "md:grid-cols-[220px_1fr]",
+          showOrganizerPanel && showSignaturePanel && showFormsPanel
+            ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+            : showOrganizerPanel && showSignaturePanel
+              ? "md:grid-cols-[220px_1fr_320px_360px]"
+              : showOrganizerPanel && showFormsPanel
+                ? "md:grid-cols-[220px_1fr_320px_360px]"
+                : showSignaturePanel && showFormsPanel
+                  ? "md:grid-cols-[220px_1fr_360px_360px]"
+                  : showOrganizerPanel
+                    ? "md:grid-cols-[220px_1fr_320px]"
+                    : showSignaturePanel || showFormsPanel
+                      ? "md:grid-cols-[220px_1fr_360px]"
+                      : "md:grid-cols-[220px_1fr]",
         )}
       >
         <aside
@@ -1174,6 +1354,27 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               }}
               onUpdateRequest={handleUpdateSignatureRequest}
               onSendRequest={handleSendSignatureRequest}
+            />
+          </aside>
+        ) : null}
+        {showFormsPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <FormsPanel
+              fields={allCurrentDocumentFormFields}
+              selectedFieldId={selectedFormFieldId}
+              currentPage={pageNumber}
+              onSelectField={(fieldId) => selectFormField(documentKey, fieldId)}
+              onAddField={handleCreateFormField}
+              onDeleteField={handleDeleteFormField}
+              onUpdateFieldName={(fieldId, name) => handleUpdateFormField(fieldId, { name })}
+              onUpdateFieldValue={handleSubmitFormFieldValue}
+              onSubmitField={(fieldId) => {
+                const target = allCurrentDocumentFormFields.find((field) => field.id === fieldId);
+                if (!target) {
+                  return;
+                }
+                handleSubmitFormFieldValue(fieldId, String(target.value ?? ""));
+              }}
             />
           </aside>
         ) : null}
