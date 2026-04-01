@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import {
+  MessagesSquare,
   ChevronLeft,
   ChevronRight,
   Columns3,
@@ -59,6 +60,15 @@ import {
   updateFormFieldOnServer,
 } from "@/features/forms/services/forms-api";
 import { useFormsStore } from "@/features/forms/services/forms-store";
+import { CollaborationPanel } from "@/features/collaboration/components/collaboration-panel";
+import {
+  createCommentOnServer,
+  createDocumentVersionOnServer,
+  fetchActivityEvents,
+  fetchComments,
+  fetchDocumentVersions,
+} from "@/features/collaboration/services/collaboration-api";
+import { useCollaborationStore } from "@/features/collaboration/services/collaboration-store";
 import { OcrPanel } from "@/features/ocr/components/ocr-panel";
 import { createOcrJobOnServer, fetchOcrJobs } from "@/features/ocr/services/ocr-api";
 import { useOcrStore } from "@/features/ocr/services/ocr-store";
@@ -213,6 +223,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(false);
   const [showFormsPanel, setShowFormsPanel] = useState<boolean>(false);
   const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
+  const [showCollaborationPanel, setShowCollaborationPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -277,6 +288,17 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const upsertOcrJob = useOcrStore((state) => state.upsertJob);
   const setOcrJobResults = useOcrStore((state) => state.setJobResults);
   const selectOcrJob = useOcrStore((state) => state.selectJob);
+  const commentsByDocument = useCollaborationStore((state) => state.commentsByDocument);
+  const versionsByDocument = useCollaborationStore((state) => state.versionsByDocument);
+  const activitiesByDocument = useCollaborationStore((state) => state.activitiesByDocument);
+  const setDocumentComments = useCollaborationStore((state) => state.setDocumentComments);
+  const setDocumentVersions = useCollaborationStore((state) => state.setDocumentVersions);
+  const setDocumentActivities = useCollaborationStore((state) => state.setDocumentActivities);
+  const createLocalComment = useCollaborationStore((state) => state.createLocalComment);
+  const replaceComment = useCollaborationStore((state) => state.replaceComment);
+  const setActiveCommentId = useCollaborationStore((state) => state.setActiveCommentId);
+  const createLocalVersion = useCollaborationStore((state) => state.createLocalVersion);
+  const replaceVersion = useCollaborationStore((state) => state.replaceVersion);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -468,6 +490,63 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   ]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentComments(documentKey, []);
+      setDocumentVersions(documentKey, []);
+      setDocumentActivities(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void fetchComments(persistedDocumentId, documentKey)
+      .then((comments) => {
+        if (!isCancelled) {
+          setDocumentComments(documentKey, comments);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load comments.");
+        }
+      });
+
+    void fetchDocumentVersions(persistedDocumentId, documentKey)
+      .then((versions) => {
+        if (!isCancelled) {
+          setDocumentVersions(documentKey, versions);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load document versions.");
+        }
+      });
+
+    void fetchActivityEvents(persistedDocumentId, documentKey)
+      .then((events) => {
+        if (!isCancelled) {
+          setDocumentActivities(documentKey, events);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load activity events.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    documentKey,
+    persistedDocumentId,
+    setDocumentActivities,
+    setDocumentComments,
+    setDocumentVersions,
+  ]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
@@ -587,6 +666,9 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     signatureRequestsByDocument[documentKey] ?? [];
   const allCurrentDocumentFormFields = formFieldsByDocument[documentKey] ?? [];
   const allCurrentDocumentOcrJobs = ocrJobsByDocument[documentKey] ?? [];
+  const allCurrentDocumentComments = commentsByDocument[documentKey] ?? [];
+  const allCurrentDocumentVersions = versionsByDocument[documentKey] ?? [];
+  const allCurrentDocumentActivities = activitiesByDocument[documentKey] ?? [];
   const selectedSignatureRequest =
     getSelectedSignatureRequest(documentKey) ?? null;
   const selectedOcrJob =
@@ -955,6 +1037,74 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       });
   }
 
+  function handleCreateComment(input: {
+    body: string;
+    pageNumber?: number;
+    anchorJson?: Record<string, unknown>;
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before adding comments.");
+      return;
+    }
+
+    const local = createLocalComment(documentKey, {
+      documentId: persistedDocumentId,
+      body: input.body,
+      pageNumber: input.pageNumber,
+      anchorJson: input.anchorJson,
+    });
+    setActiveCommentId(documentKey, local.id);
+
+    void createCommentOnServer({
+      documentId: persistedDocumentId,
+      documentKey,
+      body: input.body,
+      pageNumber: input.pageNumber,
+      anchorJson: input.anchorJson,
+    })
+      .then((saved) => {
+        replaceComment(documentKey, local.id, saved);
+        setActiveCommentId(documentKey, saved.id);
+      })
+      .catch(() => {
+        setError("Failed to create comment.");
+      });
+  }
+
+  function handleCreateVersion(input: {
+    source: "UPLOAD" | "EDIT" | "IMPORT" | "OCR" | "SIGNATURE" | "API";
+    label?: string;
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before creating versions.");
+      return;
+    }
+
+    const local = createLocalVersion(documentKey, {
+      documentId: persistedDocumentId,
+      source: input.source,
+      storageKey: `versions/${persistedDocumentId}/draft-${Date.now().toString()}.pdf`,
+      checksumSha256: "pending",
+      pageCount: totalPages || 1,
+      label: input.label,
+    });
+
+    void createDocumentVersionOnServer({
+      documentId: persistedDocumentId,
+      documentKey,
+      source: input.source,
+      storageKey: `versions/${persistedDocumentId}/v-next-${Date.now().toString()}.pdf`,
+      checksumSha256: `sha256-${Date.now().toString()}`,
+      pageCount: totalPages || 1,
+    })
+      .then((saved) => {
+        replaceVersion(documentKey, local.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to create document version.");
+      });
+  }
+
   function handleApplySourceInput() {
     const next = toViewerSource(sourceInputValue);
     if (!next) {
@@ -1253,6 +1403,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               <ScanText className="mr-1 h-4 w-4" />
               OCR
             </Button>
+            <Button
+              size="sm"
+              variant={showCollaborationPanel ? "secondary" : "ghost"}
+              onClick={() => setShowCollaborationPanel((current) => !current)}
+            >
+              <MessagesSquare className="mr-1 h-4 w-4" />
+              Collaborate
+            </Button>
           </div>
 
           <Button
@@ -1320,31 +1478,61 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       <div
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
-          showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel
-            ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+          showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel && showCollaborationPanel
+            ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px_360px]"
+            : showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+              : showOrganizerPanel && showSignaturePanel && showFormsPanel && showCollaborationPanel
+                ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+                : showOrganizerPanel && showSignaturePanel && showOcrPanel && showCollaborationPanel
+                  ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+                  : showOrganizerPanel && showFormsPanel && showOcrPanel && showCollaborationPanel
+                    ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+                    : showSignaturePanel && showFormsPanel && showOcrPanel && showCollaborationPanel
+                      ? "md:grid-cols-[220px_1fr_360px_360px_360px_360px]"
             : showOrganizerPanel && showSignaturePanel && showFormsPanel
               ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
               : showOrganizerPanel && showSignaturePanel && showOcrPanel
                 ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+            : showOrganizerPanel && showSignaturePanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
                 : showOrganizerPanel && showFormsPanel && showOcrPanel
                   ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+            : showOrganizerPanel && showFormsPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+            : showOrganizerPanel && showOcrPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
                   : showSignaturePanel && showFormsPanel && showOcrPanel
                     ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
+            : showSignaturePanel && showFormsPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
+            : showSignaturePanel && showOcrPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
+            : showFormsPanel && showOcrPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
                     : showOrganizerPanel && showSignaturePanel
                       ? "md:grid-cols-[220px_1fr_320px_360px]"
                       : showOrganizerPanel && showFormsPanel
                         ? "md:grid-cols-[220px_1fr_320px_360px]"
                         : showOrganizerPanel && showOcrPanel
                           ? "md:grid-cols-[220px_1fr_320px_360px]"
+            : showOrganizerPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px]"
                           : showSignaturePanel && showFormsPanel
                             ? "md:grid-cols-[220px_1fr_360px_360px]"
                             : showSignaturePanel && showOcrPanel
                               ? "md:grid-cols-[220px_1fr_360px_360px]"
                               : showFormsPanel && showOcrPanel
                                 ? "md:grid-cols-[220px_1fr_360px_360px]"
+            : showSignaturePanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px]"
+            : showFormsPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px]"
+            : showOcrPanel && showCollaborationPanel
+              ? "md:grid-cols-[220px_1fr_360px_360px]"
                                 : showOrganizerPanel
                                   ? "md:grid-cols-[220px_1fr_320px]"
-                                  : showSignaturePanel || showFormsPanel || showOcrPanel
+            : showSignaturePanel || showFormsPanel || showOcrPanel || showCollaborationPanel
                                     ? "md:grid-cols-[220px_1fr_360px]"
                                     : "md:grid-cols-[220px_1fr]",
         )}
@@ -1485,6 +1673,46 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               canRunJob={Boolean(persistedDocumentId && totalPages)}
               onRunJob={handleRunOcr}
               onSelectJob={(jobId) => selectOcrJob(documentKey, jobId)}
+            />
+          </aside>
+        ) : null}
+        {showCollaborationPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <CollaborationPanel
+              activePageNumber={pageNumber}
+              comments={allCurrentDocumentComments}
+              versions={allCurrentDocumentVersions}
+              activity={allCurrentDocumentActivities}
+              canPersist={Boolean(persistedDocumentId)}
+              onCreateComment={(input) =>
+                handleCreateComment({
+                  body: input.body,
+                  pageNumber: input.pageNumber,
+                })
+              }
+              onCreateVersion={(input) =>
+                handleCreateVersion({
+                  source: input.source,
+                })
+              }
+              onRefresh={() => {
+                if (!persistedDocumentId) {
+                  return;
+                }
+                void Promise.all([
+                  fetchComments(persistedDocumentId, documentKey).then((comments) =>
+                    setDocumentComments(documentKey, comments),
+                  ),
+                  fetchDocumentVersions(persistedDocumentId, documentKey).then((versions) =>
+                    setDocumentVersions(documentKey, versions),
+                  ),
+                  fetchActivityEvents(persistedDocumentId, documentKey).then((events) =>
+                    setDocumentActivities(documentKey, events),
+                  ),
+                ]).catch(() => {
+                  setError("Unable to refresh collaboration data.");
+                });
+              }}
             />
           </aside>
         ) : null}
