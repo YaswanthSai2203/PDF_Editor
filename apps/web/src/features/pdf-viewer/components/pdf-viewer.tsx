@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import {
+  Sparkles,
   MessagesSquare,
   ChevronLeft,
   ChevronRight,
@@ -60,6 +61,13 @@ import {
   updateFormFieldOnServer,
 } from "@/features/forms/services/forms-api";
 import { useFormsStore } from "@/features/forms/services/forms-store";
+import { AiAssistantPanel } from "@/features/ai-assistant/components/ai-assistant-panel";
+import {
+  askAssistantOnServer,
+  fetchAssistantMessages,
+} from "@/features/ai-assistant/services/ai-assistant-api";
+import type { AiMessageEntity } from "@/features/ai-assistant/domain/ai-assistant";
+import { useAiAssistantStore } from "@/features/ai-assistant/services/ai-assistant-store";
 import { CollaborationPanel } from "@/features/collaboration/components/collaboration-panel";
 import {
   createCommentOnServer,
@@ -224,6 +232,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showFormsPanel, setShowFormsPanel] = useState<boolean>(false);
   const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
   const [showCollaborationPanel, setShowCollaborationPanel] = useState<boolean>(false);
+  const [showAiPanel, setShowAiPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -299,6 +308,12 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const setActiveCommentId = useCollaborationStore((state) => state.setActiveCommentId);
   const createLocalVersion = useCollaborationStore((state) => state.createLocalVersion);
   const replaceVersion = useCollaborationStore((state) => state.replaceVersion);
+  const aiMessagesByDocument = useAiAssistantStore((state) => state.messagesByDocument);
+  const aiBusyByDocument = useAiAssistantStore((state) => state.isBusyByDocument);
+  const setDocumentAiMessages = useAiAssistantStore((state) => state.setDocumentMessages);
+  const addLocalAiMessage = useAiAssistantStore((state) => state.addLocalMessage);
+  const replaceAiMessage = useAiAssistantStore((state) => state.replaceMessage);
+  const setAiBusy = useAiAssistantStore((state) => state.setBusy);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -547,6 +562,31 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   ]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentAiMessages(documentKey, []);
+      setAiBusy(documentKey, false);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchAssistantMessages(persistedDocumentId, documentKey)
+      .then((messages) => {
+        if (!isCancelled) {
+          setDocumentAiMessages(documentKey, messages);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load AI assistant messages.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setAiBusy, setDocumentAiMessages]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
@@ -669,6 +709,8 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const allCurrentDocumentComments = commentsByDocument[documentKey] ?? [];
   const allCurrentDocumentVersions = versionsByDocument[documentKey] ?? [];
   const allCurrentDocumentActivities = activitiesByDocument[documentKey] ?? [];
+  const allCurrentDocumentAiMessages = aiMessagesByDocument[documentKey] ?? [];
+  const isAiBusy = aiBusyByDocument[documentKey] ?? false;
   const selectedSignatureRequest =
     getSelectedSignatureRequest(documentKey) ?? null;
   const selectedOcrJob =
@@ -1105,6 +1147,60 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       });
   }
 
+  function openAiWithPrompt(prompt: string) {
+    setShowAiPanel(true);
+    void handleAiSubmit(prompt);
+  }
+
+  async function handleAiSubmit(prompt: string) {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      return;
+    }
+
+    const localQuestion = addLocalAiMessage(documentKey, {
+      role: "user",
+      content: trimmedPrompt,
+      pageNumber,
+      persisted: false,
+    });
+
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before using AI assistant.");
+      return;
+    }
+
+    setAiBusy(documentKey, true);
+    try {
+      const response = await askAssistantOnServer({
+        documentId: persistedDocumentId,
+        documentKey,
+        prompt: trimmedPrompt,
+        pageNumber,
+        context: {
+          totalPages,
+          currentPage: pageNumber,
+          mode: interactionMode,
+          selectedTool: editorActiveTool,
+          counts: {
+            editorElements: allCurrentDocumentEditorElements.length,
+            formFields: allCurrentDocumentFormFields.length,
+            comments: allCurrentDocumentComments.length,
+            versions: allCurrentDocumentVersions.length,
+            ocrJobs: allCurrentDocumentOcrJobs.length,
+          },
+        },
+      });
+      replaceAiMessage(documentKey, localQuestion.id, response.question);
+      addLocalAiMessage(documentKey, response.answer);
+      setError(null);
+    } catch {
+      setError("AI assistant request failed.");
+    } finally {
+      setAiBusy(documentKey, false);
+    }
+  }
+
   function handleApplySourceInput() {
     const next = toViewerSource(sourceInputValue);
     if (!next) {
@@ -1411,6 +1507,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               <MessagesSquare className="mr-1 h-4 w-4" />
               Collaborate
             </Button>
+            <Button
+              size="sm"
+              variant={showAiPanel ? "secondary" : "ghost"}
+              onClick={() => setShowAiPanel((current) => !current)}
+            >
+              <Sparkles className="mr-1 h-4 w-4" />
+              AI
+            </Button>
           </div>
 
           <Button
@@ -1478,63 +1582,44 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       <div
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
-          showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel && showCollaborationPanel
-            ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px_360px]"
-            : showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
-              : showOrganizerPanel && showSignaturePanel && showFormsPanel && showCollaborationPanel
-                ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
-                : showOrganizerPanel && showSignaturePanel && showOcrPanel && showCollaborationPanel
-                  ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
-                  : showOrganizerPanel && showFormsPanel && showOcrPanel && showCollaborationPanel
-                    ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
-                    : showSignaturePanel && showFormsPanel && showOcrPanel && showCollaborationPanel
-                      ? "md:grid-cols-[220px_1fr_360px_360px_360px_360px]"
-            : showOrganizerPanel && showSignaturePanel && showFormsPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-              : showOrganizerPanel && showSignaturePanel && showOcrPanel
-                ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-            : showOrganizerPanel && showSignaturePanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-                : showOrganizerPanel && showFormsPanel && showOcrPanel
-                  ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-            : showOrganizerPanel && showFormsPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-            : showOrganizerPanel && showOcrPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-                  : showSignaturePanel && showFormsPanel && showOcrPanel
-                    ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
-            : showSignaturePanel && showFormsPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
-            : showSignaturePanel && showOcrPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
-            : showFormsPanel && showOcrPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
-                    : showOrganizerPanel && showSignaturePanel
-                      ? "md:grid-cols-[220px_1fr_320px_360px]"
-                      : showOrganizerPanel && showFormsPanel
-                        ? "md:grid-cols-[220px_1fr_320px_360px]"
-                        : showOrganizerPanel && showOcrPanel
-                          ? "md:grid-cols-[220px_1fr_320px_360px]"
-            : showOrganizerPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_320px_360px]"
-                          : showSignaturePanel && showFormsPanel
-                            ? "md:grid-cols-[220px_1fr_360px_360px]"
-                            : showSignaturePanel && showOcrPanel
-                              ? "md:grid-cols-[220px_1fr_360px_360px]"
-                              : showFormsPanel && showOcrPanel
-                                ? "md:grid-cols-[220px_1fr_360px_360px]"
-            : showSignaturePanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px]"
-            : showFormsPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px]"
-            : showOcrPanel && showCollaborationPanel
-              ? "md:grid-cols-[220px_1fr_360px_360px]"
-                                : showOrganizerPanel
-                                  ? "md:grid-cols-[220px_1fr_320px]"
-            : showSignaturePanel || showFormsPanel || showOcrPanel || showCollaborationPanel
-                                    ? "md:grid-cols-[220px_1fr_360px]"
-                                    : "md:grid-cols-[220px_1fr]",
+          "md:grid-cols-[220px_1fr]",
+          (showOrganizerPanel || showSignaturePanel || showFormsPanel || showOcrPanel || showCollaborationPanel || showAiPanel) &&
+            "md:grid-cols-[220px_1fr_360px]",
+          (showOrganizerPanel ? 1 : 0) +
+            (showSignaturePanel ? 1 : 0) +
+            (showFormsPanel ? 1 : 0) +
+            (showOcrPanel ? 1 : 0) +
+            (showCollaborationPanel ? 1 : 0) +
+            (showAiPanel ? 1 : 0) >=
+            2 && "md:grid-cols-[220px_1fr_360px_360px]",
+          (showOrganizerPanel ? 1 : 0) +
+            (showSignaturePanel ? 1 : 0) +
+            (showFormsPanel ? 1 : 0) +
+            (showOcrPanel ? 1 : 0) +
+            (showCollaborationPanel ? 1 : 0) +
+            (showAiPanel ? 1 : 0) >=
+            3 && "md:grid-cols-[220px_1fr_360px_360px_360px]",
+          (showOrganizerPanel ? 1 : 0) +
+            (showSignaturePanel ? 1 : 0) +
+            (showFormsPanel ? 1 : 0) +
+            (showOcrPanel ? 1 : 0) +
+            (showCollaborationPanel ? 1 : 0) +
+            (showAiPanel ? 1 : 0) >=
+            4 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px]",
+          (showOrganizerPanel ? 1 : 0) +
+            (showSignaturePanel ? 1 : 0) +
+            (showFormsPanel ? 1 : 0) +
+            (showOcrPanel ? 1 : 0) +
+            (showCollaborationPanel ? 1 : 0) +
+            (showAiPanel ? 1 : 0) >=
+            5 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px_360px]",
+          (showOrganizerPanel ? 1 : 0) +
+            (showSignaturePanel ? 1 : 0) +
+            (showFormsPanel ? 1 : 0) +
+            (showOcrPanel ? 1 : 0) +
+            (showCollaborationPanel ? 1 : 0) +
+            (showAiPanel ? 1 : 0) >=
+            6 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px_360px_360px]",
         )}
       >
         <aside
@@ -1713,6 +1798,29 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                   setError("Unable to refresh collaboration data.");
                 });
               }}
+            />
+          </aside>
+        ) : null}
+        {showAiPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <AiAssistantPanel
+              isBusy={isAiBusy}
+              messages={allCurrentDocumentAiMessages as AiMessageEntity[]}
+              onSubmitPrompt={handleAiSubmit}
+              onQuickAction={(action) => {
+                if (action === "SUMMARIZE_PAGE") {
+                  openAiWithPrompt(`Summarize page ${pageNumber} clearly.`);
+                  return;
+                }
+                if (action === "EXPLAIN_SELECTION") {
+                  openAiWithPrompt(
+                    `Explain the current editor/form context on page ${pageNumber}.`,
+                  );
+                  return;
+                }
+                openAiWithPrompt("Suggest next best edits for this PDF.");
+              }}
+              contextSummary={`Page ${pageNumber} of ${totalPages || "?"} · Mode: ${interactionMode}`}
             />
           </aside>
         ) : null}
