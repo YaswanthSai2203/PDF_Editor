@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import {
+  ShieldCheck,
   Sparkles,
   MessagesSquare,
   ChevronLeft,
@@ -61,6 +62,18 @@ import {
   updateFormFieldOnServer,
 } from "@/features/forms/services/forms-api";
 import { useFormsStore } from "@/features/forms/services/forms-store";
+import { AdminPanel } from "@/features/admin/components/admin-panel";
+import {
+  createMembershipOnServer,
+  createSubscriptionOnServer,
+  fetchEntitlements,
+  fetchMemberships,
+  fetchSubscriptions,
+  upsertEntitlementOnServer,
+  updateMembershipOnServer,
+  updateSubscriptionOnServer,
+} from "@/features/admin/services/admin-api";
+import { useAdminStore } from "@/features/admin/services/admin-store";
 import { AiAssistantPanel } from "@/features/ai-assistant/components/ai-assistant-panel";
 import {
   askAssistantOnServer,
@@ -233,6 +246,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
   const [showCollaborationPanel, setShowCollaborationPanel] = useState<boolean>(false);
   const [showAiPanel, setShowAiPanel] = useState<boolean>(false);
+  const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -314,6 +328,15 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const addLocalAiMessage = useAiAssistantStore((state) => state.addLocalMessage);
   const replaceAiMessage = useAiAssistantStore((state) => state.replaceMessage);
   const setAiBusy = useAiAssistantStore((state) => state.setBusy);
+  const membershipsByDocument = useAdminStore((state) => state.membershipsByDocument);
+  const subscriptionsByDocument = useAdminStore((state) => state.subscriptionsByDocument);
+  const entitlementsByDocument = useAdminStore((state) => state.entitlementsByDocument);
+  const setDocumentMemberships = useAdminStore((state) => state.setDocumentMemberships);
+  const setDocumentSubscriptions = useAdminStore((state) => state.setDocumentSubscriptions);
+  const setDocumentEntitlements = useAdminStore((state) => state.setDocumentEntitlements);
+  const upsertMembership = useAdminStore((state) => state.upsertMembership);
+  const upsertSubscription = useAdminStore((state) => state.upsertSubscription);
+  const upsertEntitlement = useAdminStore((state) => state.upsertEntitlement);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -587,6 +610,62 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   }, [documentKey, persistedDocumentId, setAiBusy, setDocumentAiMessages]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentMemberships(documentKey, []);
+      setDocumentSubscriptions(documentKey, []);
+      setDocumentEntitlements(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchMemberships(persistedDocumentId)
+      .then((memberships) => {
+        if (!isCancelled) {
+          setDocumentMemberships(documentKey, memberships);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load team memberships.");
+        }
+      });
+
+    void fetchSubscriptions(persistedDocumentId)
+      .then((subscriptions) => {
+        if (!isCancelled) {
+          setDocumentSubscriptions(documentKey, subscriptions);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load subscriptions.");
+        }
+      });
+
+    void fetchEntitlements(persistedDocumentId)
+      .then((entitlements) => {
+        if (!isCancelled) {
+          setDocumentEntitlements(documentKey, entitlements);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load entitlements.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    documentKey,
+    persistedDocumentId,
+    setDocumentEntitlements,
+    setDocumentMemberships,
+    setDocumentSubscriptions,
+  ]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
@@ -710,6 +789,9 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const allCurrentDocumentVersions = versionsByDocument[documentKey] ?? [];
   const allCurrentDocumentActivities = activitiesByDocument[documentKey] ?? [];
   const allCurrentDocumentAiMessages = aiMessagesByDocument[documentKey] ?? [];
+  const allCurrentDocumentMemberships = membershipsByDocument[documentKey] ?? [];
+  const allCurrentDocumentSubscriptions = subscriptionsByDocument[documentKey] ?? [];
+  const allCurrentDocumentEntitlements = entitlementsByDocument[documentKey] ?? [];
   const isAiBusy = aiBusyByDocument[documentKey] ?? false;
   const selectedSignatureRequest =
     getSelectedSignatureRequest(documentKey) ?? null;
@@ -1147,6 +1229,104 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       });
   }
 
+  function handleCreateMembership(input: {
+    email: string;
+    role: "OWNER" | "ADMIN" | "EDITOR" | "VIEWER";
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before team management.");
+      return;
+    }
+    void createMembershipOnServer({
+      organizationId: persistedDocumentId,
+      email: input.email,
+      role: input.role,
+    })
+      .then((saved) => {
+        upsertMembership(documentKey, saved);
+      })
+      .catch(() => {
+        setError("Failed to create membership.");
+      });
+  }
+
+  function handleUpdateMembership(
+    membershipId: string,
+    role: "OWNER" | "ADMIN" | "EDITOR" | "VIEWER",
+  ) {
+    void updateMembershipOnServer(membershipId, role, documentKey)
+      .then((saved) => {
+        upsertMembership(documentKey, saved);
+      })
+      .catch(() => {
+        setError("Failed to update membership role.");
+      });
+  }
+
+  function handleCreateSubscription(input: {
+    provider: string;
+    providerCustomerId: string;
+    providerSubscriptionId: string;
+    status: string;
+    planTier: "FREE" | "PRO" | "ENTERPRISE";
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before billing updates.");
+      return;
+    }
+    void createSubscriptionOnServer({
+      organizationId: persistedDocumentId,
+      provider: input.provider,
+      providerCustomerId: input.providerCustomerId,
+      providerSubscriptionId: input.providerSubscriptionId,
+      status: input.status,
+      planTier: input.planTier,
+    })
+      .then((saved) => {
+        upsertSubscription(documentKey, saved);
+      })
+      .catch(() => {
+        setError("Failed to create subscription.");
+      });
+  }
+
+  function handleUpdateSubscription(
+    subscriptionId: string,
+    planTier: "FREE" | "PRO" | "ENTERPRISE",
+    status: string,
+  ) {
+    void updateSubscriptionOnServer(subscriptionId, planTier, status, documentKey)
+      .then((saved) => {
+        upsertSubscription(documentKey, saved);
+      })
+      .catch(() => {
+        setError("Failed to update subscription.");
+      });
+  }
+
+  function handleUpsertEntitlement(input: {
+    featureKey: string;
+    enabled: boolean;
+    limitValue?: number;
+  }) {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before entitlement updates.");
+      return;
+    }
+    void upsertEntitlementOnServer({
+      organizationId: persistedDocumentId,
+      featureKey: input.featureKey,
+      enabled: input.enabled,
+      limitValue: input.limitValue,
+    })
+      .then((saved) => {
+        upsertEntitlement(documentKey, saved);
+      })
+      .catch(() => {
+        setError("Failed to update entitlement.");
+      });
+  }
+
   function openAiWithPrompt(prompt: string) {
     setShowAiPanel(true);
     void handleAiSubmit(prompt);
@@ -1515,6 +1695,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               <Sparkles className="mr-1 h-4 w-4" />
               AI
             </Button>
+            <Button
+              size="sm"
+              variant={showAdminPanel ? "secondary" : "ghost"}
+              onClick={() => setShowAdminPanel((current) => !current)}
+            >
+              <ShieldCheck className="mr-1 h-4 w-4" />
+              Admin
+            </Button>
           </div>
 
           <Button
@@ -1583,42 +1771,47 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
           "md:grid-cols-[220px_1fr]",
-          (showOrganizerPanel || showSignaturePanel || showFormsPanel || showOcrPanel || showCollaborationPanel || showAiPanel) &&
+          (showOrganizerPanel || showSignaturePanel || showFormsPanel || showOcrPanel || showCollaborationPanel || showAiPanel || showAdminPanel) &&
             "md:grid-cols-[220px_1fr_360px]",
           (showOrganizerPanel ? 1 : 0) +
             (showSignaturePanel ? 1 : 0) +
             (showFormsPanel ? 1 : 0) +
             (showOcrPanel ? 1 : 0) +
             (showCollaborationPanel ? 1 : 0) +
-            (showAiPanel ? 1 : 0) >=
+            (showAiPanel ? 1 : 0) +
+            (showAdminPanel ? 1 : 0) >=
             2 && "md:grid-cols-[220px_1fr_360px_360px]",
           (showOrganizerPanel ? 1 : 0) +
             (showSignaturePanel ? 1 : 0) +
             (showFormsPanel ? 1 : 0) +
             (showOcrPanel ? 1 : 0) +
             (showCollaborationPanel ? 1 : 0) +
-            (showAiPanel ? 1 : 0) >=
+            (showAiPanel ? 1 : 0) +
+            (showAdminPanel ? 1 : 0) >=
             3 && "md:grid-cols-[220px_1fr_360px_360px_360px]",
           (showOrganizerPanel ? 1 : 0) +
             (showSignaturePanel ? 1 : 0) +
             (showFormsPanel ? 1 : 0) +
             (showOcrPanel ? 1 : 0) +
             (showCollaborationPanel ? 1 : 0) +
-            (showAiPanel ? 1 : 0) >=
+            (showAiPanel ? 1 : 0) +
+            (showAdminPanel ? 1 : 0) >=
             4 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px]",
           (showOrganizerPanel ? 1 : 0) +
             (showSignaturePanel ? 1 : 0) +
             (showFormsPanel ? 1 : 0) +
             (showOcrPanel ? 1 : 0) +
             (showCollaborationPanel ? 1 : 0) +
-            (showAiPanel ? 1 : 0) >=
+            (showAiPanel ? 1 : 0) +
+            (showAdminPanel ? 1 : 0) >=
             5 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px_360px]",
           (showOrganizerPanel ? 1 : 0) +
             (showSignaturePanel ? 1 : 0) +
             (showFormsPanel ? 1 : 0) +
             (showOcrPanel ? 1 : 0) +
             (showCollaborationPanel ? 1 : 0) +
-            (showAiPanel ? 1 : 0) >=
+            (showAiPanel ? 1 : 0) +
+            (showAdminPanel ? 1 : 0) >=
             6 && "md:grid-cols-[220px_1fr_360px_360px_360px_360px_360px_360px]",
         )}
       >
@@ -1821,6 +2014,39 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                 openAiWithPrompt("Suggest next best edits for this PDF.");
               }}
               contextSummary={`Page ${pageNumber} of ${totalPages || "?"} · Mode: ${interactionMode}`}
+            />
+          </aside>
+        ) : null}
+        {showAdminPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <AdminPanel
+              memberships={allCurrentDocumentMemberships}
+              subscriptions={allCurrentDocumentSubscriptions}
+              entitlements={allCurrentDocumentEntitlements}
+              canPersist={Boolean(persistedDocumentId)}
+              onRefresh={() => {
+                if (!persistedDocumentId) {
+                  return;
+                }
+                void Promise.all([
+                  fetchMemberships(persistedDocumentId).then((memberships) =>
+                    setDocumentMemberships(documentKey, memberships),
+                  ),
+                  fetchSubscriptions(persistedDocumentId).then((subscriptions) =>
+                    setDocumentSubscriptions(documentKey, subscriptions),
+                  ),
+                  fetchEntitlements(persistedDocumentId).then((entitlements) =>
+                    setDocumentEntitlements(documentKey, entitlements),
+                  ),
+                ]).catch(() => {
+                  setError("Unable to refresh admin data.");
+                });
+              }}
+              onCreateMembership={handleCreateMembership}
+              onUpdateMembership={handleUpdateMembership}
+              onCreateSubscription={handleCreateSubscription}
+              onUpdateSubscription={handleUpdateSubscription}
+              onUpsertEntitlement={handleUpsertEntitlement}
             />
           </aside>
         ) : null}
