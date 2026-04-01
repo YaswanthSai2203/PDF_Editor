@@ -1,36 +1,117 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DocFlow — Premium PDF Editor SaaS
+
+A production-ready PDF editor comparable to Adobe Acrobat, built with Next.js 16, TypeScript, Tailwind CSS, and PDF.js.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full system design document.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 App Router (Turbopack) |
+| Language | TypeScript (strict) |
+| Styling | Tailwind CSS v4 + shadcn/ui components |
+| PDF Rendering | PDF.js (Mozilla) |
+| Canvas/Annotations | SVG + Canvas API (Konva-ready) |
+| State | Zustand with devtools + persist |
+| Database | PostgreSQL via Prisma 7 ORM |
+| Auth | NextAuth v5 (pluggable providers) |
+| Storage | S3 / Cloudflare R2 |
+| Billing | Stripe |
+| Email | Resend |
+| AI | OpenAI GPT-4 |
+| OCR | AWS Textract / Tesseract |
+| Real-time | WebSockets + Yjs (CRDT) |
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+
+- PostgreSQL database
+- Copy `.env.example` to `.env.local` and fill in required values
+
+### Installation
 
 ```bash
+npm install
+cp .env.example .env.local
+# Edit .env.local with your DATABASE_URL and other secrets
+
+# Generate Prisma client
+npx prisma generate
+
+# Run database migrations (requires a running DB)
+npx prisma migrate dev
+
+# Start development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project Structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+src/
+├── app/
+│   ├── (dashboard)/          # Authenticated app shell
+│   │   ├── layout.tsx        # Dashboard layout (sidebar + header)
+│   │   ├── page.tsx          # Home dashboard
+│   │   ├── documents/        # Document list
+│   │   └── editor/[id]/      # PDF editor
+│   └── api/                  # API routes (to be expanded)
+├── components/
+│   ├── ui/                   # shadcn/ui base components
+│   ├── layout/               # AppSidebar, AppHeader
+│   ├── pdf/                  # PDFViewer, PDFPage, PDFThumbnail
+│   ├── annotations/          # AnnotationLayer, AnnotationRenderer
+│   ├── toolbar/              # EditorToolbar
+│   └── sidebar/              # PanelThumbnails, PanelAnnotations
+├── hooks/                    # use-pdf, use-annotations
+├── stores/                   # Zustand: document, annotation, ui
+├── types/                    # document, annotation, signature, api
+├── lib/                      # Service abstractions
+│   └── pdf/                  # PDFService (PDF.js wrapper)
+└── db/                       # Prisma client singleton
+prisma/
+└── schema.prisma             # Full database schema
+```
 
-## Learn More
+## Feature Roadmap
 
-To learn more about Next.js, take a look at the following resources:
+### Phase 1 — Done ✓
+- [x] Architecture design & folder structure
+- [x] Database schema (users, teams, documents, annotations, signatures, forms, billing, audit)
+- [x] App shell layout (sidebar + header)
+- [x] Dashboard home page
+- [x] Documents list page
+- [x] PDF viewer (PDF.js, continuous scroll, virtualized pages)
+- [x] Annotation engine (highlight, underline, strikethrough, shapes, freehand, text)
+- [x] Editor toolbar (all tools, zoom, page nav)
+- [x] Sidebar panels (thumbnails, annotations)
+- [x] Zustand state management
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Phase 2 — Next
+- [ ] API routes for document CRUD
+- [ ] S3/R2 file upload with presigned URLs
+- [ ] NextAuth authentication
+- [ ] Annotation persistence (save/load from DB)
+- [ ] Comment threads with replies
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Phase 3
+- [ ] Page organizer (drag-to-reorder, merge/split PDFs)
+- [ ] Signature workflow (request, sign, audit trail)
+- [ ] Form builder/filler (AcroForm + custom forms)
 
-## Deploy on Vercel
+### Phase 4
+- [ ] OCR pipeline (AWS Textract / Tesseract)
+- [ ] Real-time collaboration (Yjs + WebSockets)
+- [ ] AI assistant (summarize, search, extract)
+- [ ] Billing (Stripe subscriptions + usage gates)
+- [ ] Testing (Vitest + Playwright E2E)
+- [ ] Deployment (Vercel + Railway/Neon)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## License
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT
