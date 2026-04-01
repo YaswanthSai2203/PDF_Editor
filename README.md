@@ -36,3 +36,4 @@ Open `http://localhost:3000/viewer`.
 - `docs/architecture/database.md`
 - `docs/product/feature-tiers.md`
 - `docs/roadmap/phases.md`
+- `docs/deployment-and-testing.md`
