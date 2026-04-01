@@ -12,6 +12,39 @@ interface AnnotationApiRecord {
   updatedAt: string;
 }
 
+interface SyncTask {
+  key: string;
+  run: () => Promise<void>;
+}
+
+const pendingTaskByKey = new Map<string, SyncTask>();
+const timeoutByKey = new Map<string, number>();
+
+function scheduleDebouncedTask(
+  key: string,
+  delayMs: number,
+  run: () => Promise<void>,
+): void {
+  pendingTaskByKey.set(key, { key, run });
+
+  const existingTimeout = timeoutByKey.get(key);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+  }
+
+  const timeoutId = window.setTimeout(() => {
+    const task = pendingTaskByKey.get(key);
+    pendingTaskByKey.delete(key);
+    timeoutByKey.delete(key);
+    if (!task) {
+      return;
+    }
+    void task.run();
+  }, delayMs);
+
+  timeoutByKey.set(key, timeoutId);
+}
+
 function parseRect(payloadJson: unknown): AnnotationRect {
   const payload =
     payloadJson && typeof payloadJson === "object"
@@ -28,6 +61,18 @@ function parseRect(payloadJson: unknown): AnnotationRect {
     widthPct: Number(rect.widthPct ?? 0),
     heightPct: Number(rect.heightPct ?? 0),
   };
+}
+
+function parseSyncVersion(payloadJson: unknown): number {
+  const payload =
+    payloadJson && typeof payloadJson === "object"
+      ? (payloadJson as Record<string, unknown>)
+      : {};
+  const value = payload.syncVersion;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return 0;
 }
 
 function getColor(kind: "HIGHLIGHT" | "NOTE"): string {
@@ -48,6 +93,7 @@ export function mapAnnotationRecordToEntity(
     documentKey,
     persistedDocumentId: record.documentId,
     persisted: true,
+    syncVersion: parseSyncVersion(record.payloadJson),
     pageNumber: record.pageNumber,
     kind: record.kind,
     rect: parseRect(record.payloadJson),
@@ -104,16 +150,57 @@ export async function createAnnotationOnServer(
 export async function updateAnnotationRectOnServer(
   annotationId: string,
   rect: AnnotationRect,
+  syncVersion: number,
 ): Promise<void> {
   const response = await fetch(`/api/annotations/${encodeURIComponent(annotationId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rect }),
+    body: JSON.stringify({ rect, syncVersion }),
   });
 
   if (!response.ok) {
     throw new Error("Failed to update annotation rect.");
   }
+}
+
+export function enqueueAnnotationRectSync(
+  annotationId: string,
+  rect: AnnotationRect,
+  syncVersion: number,
+): void {
+  scheduleDebouncedTask(
+    `rect:${annotationId}`,
+    220,
+    async () => updateAnnotationRectOnServer(annotationId, rect, syncVersion),
+  );
+}
+
+export async function updateAnnotationNoteTextOnServer(
+  annotationId: string,
+  noteText: string,
+  syncVersion: number,
+): Promise<void> {
+  const response = await fetch(`/api/annotations/${encodeURIComponent(annotationId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ noteText, syncVersion }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to update annotation note text.");
+  }
+}
+
+export function enqueueAnnotationNoteTextSync(
+  annotationId: string,
+  noteText: string,
+  syncVersion: number,
+): void {
+  scheduleDebouncedTask(
+    `note:${annotationId}`,
+    280,
+    async () => updateAnnotationNoteTextOnServer(annotationId, noteText, syncVersion),
+  );
 }
 
 export async function deleteAnnotationOnServer(annotationId: string): Promise<void> {

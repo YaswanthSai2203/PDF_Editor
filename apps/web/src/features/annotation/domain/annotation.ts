@@ -14,6 +14,7 @@ export interface AnnotationEntity {
   documentKey: string;
   persistedDocumentId?: string;
   persisted?: boolean;
+  syncVersion?: number;
   pageNumber: number;
   kind: AnnotationKind;
   rect: AnnotationRect;

@@ -22,8 +22,9 @@ import { useAnnotationStore } from "@/features/annotation/services/annotation-st
 import {
   createAnnotationOnServer,
   deleteAnnotationOnServer,
+  enqueueAnnotationNoteTextSync,
+  enqueueAnnotationRectSync,
   fetchAnnotations,
-  updateAnnotationRectOnServer,
 } from "@/features/annotation/services/annotation-api";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
@@ -73,6 +74,10 @@ function hasPageLoaded(
 
 export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
+  const { documentKey, documentId: persistedDocumentId } = useMemo(
+    () => deriveDocumentKey(sourceUrl),
+    [sourceUrl],
+  );
   const annotationsByDocument = useAnnotationStore(
     (state) => state.annotationsByDocument,
   );
@@ -91,6 +96,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const updateAnnotationRect = useAnnotationStore(
     (state) => state.updateAnnotationRect,
   );
+  const updateAnnotationNoteText = useAnnotationStore(
+    (state) => state.updateAnnotationNoteText,
+  );
+  const undo = useAnnotationStore((state) => state.undo);
+  const redo = useAnnotationStore((state) => state.redo);
+  const canUndo = useAnnotationStore((state) => state.canUndo(documentKey));
+  const canRedo = useAnnotationStore((state) => state.canRedo(documentKey));
+  const getAnnotationById = useAnnotationStore((state) => state.getAnnotationById);
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<Record<number, PDFPageProxy>>({});
@@ -103,10 +116,6 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
-  );
-  const { documentKey, documentId: persistedDocumentId } = useMemo(
-    () => deriveDocumentKey(sourceUrl),
-    [sourceUrl],
   );
 
   useEffect(() => {
@@ -353,14 +362,23 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   function handleUpdateAnnotationRect(annotationId: string, rect: AnnotationRect) {
     updateAnnotationRect(documentKey, annotationId, rect);
 
-    const target = allCurrentDocumentAnnotations.find((item) => item.id === annotationId);
+    const target = getAnnotationById(documentKey, annotationId);
     if (!target?.persisted) {
       return;
     }
 
-    void updateAnnotationRectOnServer(annotationId, rect).catch(() => {
-      setError("Failed to sync annotation movement.");
-    });
+    enqueueAnnotationRectSync(annotationId, rect, target.syncVersion ?? 0);
+  }
+
+  function handleUpdateAnnotationNoteText(annotationId: string, noteText: string) {
+    updateAnnotationNoteText(documentKey, annotationId, noteText);
+
+    const target = getAnnotationById(documentKey, annotationId);
+    if (!target?.persisted) {
+      return;
+    }
+
+    enqueueAnnotationNoteTextSync(annotationId, noteText, target.syncVersion ?? 0);
   }
 
   return (
@@ -418,6 +436,10 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             onToolChange={setActiveTool}
             canDeleteSelection={canDeleteSelection}
             onDeleteSelection={handleDeleteSelection}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={() => undo(documentKey)}
+            onRedo={() => redo(documentKey)}
           />
           <Button
             size="icon"
@@ -531,6 +553,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                   onCreateAnnotation={handleCreateAnnotation}
                   onSelectAnnotation={selectAnnotation}
                   onUpdateAnnotationRect={handleUpdateAnnotationRect}
+                  onUpdateAnnotationNoteText={handleUpdateAnnotationNoteText}
                 />
               </div>
             ))}

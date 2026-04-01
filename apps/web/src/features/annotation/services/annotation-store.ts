@@ -14,6 +14,8 @@ interface AnnotationState {
   activeTool: AnnotationTool;
   selectedAnnotationId: string | null;
   annotationsByDocument: Record<string, AnnotationEntity[]>;
+  historyByDocument: Record<string, AnnotationEntity[][]>;
+  futureByDocument: Record<string, AnnotationEntity[][]>;
   setDocumentAnnotations: (
     documentKey: string,
     annotations: AnnotationEntity[],
@@ -32,6 +34,19 @@ interface AnnotationState {
     annotationId: string,
     rect: AnnotationRect,
   ) => void;
+  updateAnnotationNoteText: (
+    documentKey: string,
+    annotationId: string,
+    noteText: string,
+  ) => void;
+  undo: (documentKey: string) => void;
+  redo: (documentKey: string) => void;
+  canUndo: (documentKey: string) => boolean;
+  canRedo: (documentKey: string) => boolean;
+  getAnnotationById: (
+    documentKey: string,
+    annotationId: string,
+  ) => AnnotationEntity | undefined;
   getAnnotationsForPage: (
     documentKey: string,
     pageNumber: number,
@@ -49,12 +64,22 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   activeTool: "SELECT",
   selectedAnnotationId: null,
   annotationsByDocument: {},
+  historyByDocument: {},
+  futureByDocument: {},
 
   setDocumentAnnotations: (documentKey, annotations) => {
     set((state) => ({
       annotationsByDocument: {
         ...state.annotationsByDocument,
         [documentKey]: annotations,
+      },
+      historyByDocument: {
+        ...state.historyByDocument,
+        [documentKey]: [],
+      },
+      futureByDocument: {
+        ...state.futureByDocument,
+        [documentKey]: [],
       },
       selectedAnnotationId: state.selectedAnnotationId,
     }));
@@ -78,6 +103,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       id: annotationId,
       documentKey: input.documentKey,
       persisted: false,
+      syncVersion: 0,
       pageNumber: input.pageNumber,
       kind: input.kind,
       rect: input.rect,
@@ -89,11 +115,24 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
     set((state) => {
       const existing = state.annotationsByDocument[input.documentKey] ?? [];
+      const previousSnapshot = existing.map((item) => ({ ...item }));
+      const nextCollection = [...existing, created];
       return {
         selectedAnnotationId: created.id,
         annotationsByDocument: {
           ...state.annotationsByDocument,
-          [input.documentKey]: [...existing, created],
+          [input.documentKey]: nextCollection,
+        },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [input.documentKey]: [
+            ...(state.historyByDocument[input.documentKey] ?? []),
+            previousSnapshot,
+          ],
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [input.documentKey]: [],
         },
       };
     });
@@ -123,6 +162,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   deleteAnnotation: (documentKey, annotationId) => {
     set((state) => {
       const existing = state.annotationsByDocument[documentKey] ?? [];
+      const previousSnapshot = existing.map((item) => ({ ...item }));
       const next = existing.filter((item) => item.id !== annotationId);
       return {
         selectedAnnotationId:
@@ -133,6 +173,17 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
           ...state.annotationsByDocument,
           [documentKey]: next,
         },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [documentKey]: [
+            ...(state.historyByDocument[documentKey] ?? []),
+            previousSnapshot,
+          ],
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [documentKey]: [],
+        },
       };
     });
   },
@@ -140,6 +191,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   updateAnnotationRect: (documentKey, annotationId, rect) => {
     set((state) => {
       const existing = state.annotationsByDocument[documentKey] ?? [];
+      const previousSnapshot = existing.map((item) => ({ ...item }));
       const next = existing.map((item) => {
         if (item.id !== annotationId) {
           return item;
@@ -147,6 +199,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         return {
           ...item,
           rect,
+          syncVersion: (item.syncVersion ?? 0) + 1,
           updatedAt: new Date().toISOString(),
         };
       });
@@ -156,8 +209,130 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
           ...state.annotationsByDocument,
           [documentKey]: next,
         },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [documentKey]: [
+            ...(state.historyByDocument[documentKey] ?? []),
+            previousSnapshot,
+          ],
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [documentKey]: [],
+        },
       };
     });
+  },
+
+  updateAnnotationNoteText: (documentKey, annotationId, noteText) => {
+    set((state) => {
+      const existing = state.annotationsByDocument[documentKey] ?? [];
+      const previousSnapshot = existing.map((item) => ({ ...item }));
+      const next = existing.map((item) => {
+        if (item.id !== annotationId) {
+          return item;
+        }
+        return {
+          ...item,
+          noteText,
+          syncVersion: (item.syncVersion ?? 0) + 1,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      return {
+        annotationsByDocument: {
+          ...state.annotationsByDocument,
+          [documentKey]: next,
+        },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [documentKey]: [
+            ...(state.historyByDocument[documentKey] ?? []),
+            previousSnapshot,
+          ],
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [documentKey]: [],
+        },
+      };
+    });
+  },
+
+  undo: (documentKey) => {
+    set((state) => {
+      const history = state.historyByDocument[documentKey] ?? [];
+      if (history.length === 0) {
+        return {};
+      }
+
+      const current = state.annotationsByDocument[documentKey] ?? [];
+      const previous = history[history.length - 1];
+
+      return {
+        annotationsByDocument: {
+          ...state.annotationsByDocument,
+          [documentKey]: previous,
+        },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [documentKey]: history.slice(0, -1),
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [documentKey]: [
+            ...(state.futureByDocument[documentKey] ?? []),
+            current,
+          ],
+        },
+      };
+    });
+  },
+
+  redo: (documentKey) => {
+    set((state) => {
+      const future = state.futureByDocument[documentKey] ?? [];
+      if (future.length === 0) {
+        return {};
+      }
+
+      const current = state.annotationsByDocument[documentKey] ?? [];
+      const next = future[future.length - 1];
+
+      return {
+        annotationsByDocument: {
+          ...state.annotationsByDocument,
+          [documentKey]: next,
+        },
+        futureByDocument: {
+          ...state.futureByDocument,
+          [documentKey]: future.slice(0, -1),
+        },
+        historyByDocument: {
+          ...state.historyByDocument,
+          [documentKey]: [
+            ...(state.historyByDocument[documentKey] ?? []),
+            current,
+          ],
+        },
+      };
+    });
+  },
+
+  canUndo: (documentKey) => {
+    const history = get().historyByDocument[documentKey] ?? [];
+    return history.length > 0;
+  },
+
+  canRedo: (documentKey) => {
+    const future = get().futureByDocument[documentKey] ?? [];
+    return future.length > 0;
+  },
+
+  getAnnotationById: (documentKey, annotationId) => {
+    const collection = get().annotationsByDocument[documentKey] ?? [];
+    return collection.find((item) => item.id === annotationId);
   },
 
   getAnnotationsForPage: (documentKey, pageNumber) => {

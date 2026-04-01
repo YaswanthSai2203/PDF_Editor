@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { updateAnnotationRectRequestSchema } from "@/features/annotation/services/annotation-api.types";
+import { updateAnnotationContentRequestSchema } from "@/features/annotation/services/annotation-api.types";
 import { prisma } from "@/lib/prisma";
 
 interface AnnotationRouteContext {
@@ -15,11 +15,11 @@ export async function PATCH(
 ) {
   const { annotationId } = await context.params;
   const payload = await request.json();
-  const parsed = updateAnnotationRectRequestSchema.safeParse(payload);
+  const parsed = updateAnnotationContentRequestSchema.safeParse(payload);
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid rect payload.", details: parsed.error.flatten() },
+      { error: "Invalid annotation update payload.", details: parsed.error.flatten() },
       { status: 400 },
     );
   }
@@ -43,7 +43,13 @@ export async function PATCH(
     data: {
       payloadJson: {
         ...previousPayload,
-        rect: parsed.data.rect,
+        ...(parsed.data.rect ? { rect: parsed.data.rect } : {}),
+        ...(typeof parsed.data.noteText === "string"
+          ? { noteText: parsed.data.noteText }
+          : {}),
+        ...(typeof parsed.data.syncVersion === "number"
+          ? { syncVersion: parsed.data.syncVersion }
+          : {}),
       },
       updatedAt: new Date(),
     },

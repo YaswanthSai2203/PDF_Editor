@@ -21,10 +21,19 @@ export const updateAnnotationRectRequestSchema = z.object({
   rect: annotationRectSchema,
 });
 
+export const updateAnnotationContentRequestSchema = z.object({
+  rect: annotationRectSchema.optional(),
+  noteText: z.string().optional(),
+  syncVersion: z.number().int().min(0).optional(),
+});
+
 export type AnnotationRectDto = z.infer<typeof annotationRectSchema>;
 export type CreateAnnotationRequestDto = z.infer<
   typeof createAnnotationRequestSchema
 >;
 export type UpdateAnnotationRectRequestDto = z.infer<
   typeof updateAnnotationRectRequestSchema
+>;
+export type UpdateAnnotationContentRequestDto = z.infer<
+  typeof updateAnnotationContentRequestSchema
 >;

@@ -23,15 +23,23 @@ export async function GET(request: Request) {
   });
 
   return NextResponse.json({
-    data: annotations.map((item: (typeof annotations)[number]) => ({
+    data: annotations.map((item: (typeof annotations)[number]) => {
+      const payload =
+        item.payloadJson && typeof item.payloadJson === "object"
+          ? (item.payloadJson as Record<string, unknown>)
+          : {};
+      return ({
       id: item.id,
       documentId: item.documentId,
       pageNumber: item.pageNumber,
       kind: item.kind,
       payloadJson: item.payloadJson,
+      syncVersion:
+        typeof payload.syncVersion === "number" ? payload.syncVersion : 0,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-    })),
+    });
+    }),
   });
 }
 
@@ -65,6 +73,7 @@ export async function POST(request: Request) {
       payloadJson: {
         rect: parsed.data.rect,
         noteText: parsed.data.noteText,
+        syncVersion: 1,
       },
       createdAt: now,
       updatedAt: now,
@@ -79,6 +88,7 @@ export async function POST(request: Request) {
         pageNumber: created.pageNumber,
         kind: created.kind,
         payloadJson: created.payloadJson,
+        syncVersion: 1,
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
       },

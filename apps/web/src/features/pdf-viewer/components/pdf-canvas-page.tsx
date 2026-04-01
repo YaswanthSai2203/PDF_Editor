@@ -25,6 +25,7 @@ interface PdfCanvasPageProps {
   ) => void;
   onSelectAnnotation?: (annotationId: string | null) => void;
   onUpdateAnnotationRect?: (annotationId: string, rect: AnnotationRect) => void;
+  onUpdateAnnotationNoteText?: (annotationId: string, noteText: string) => void;
 }
 
 export function PdfCanvasPage({
@@ -40,6 +41,7 @@ export function PdfCanvasPage({
   onCreateAnnotation,
   onSelectAnnotation,
   onUpdateAnnotationRect,
+  onUpdateAnnotationNoteText,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -117,7 +119,10 @@ export function PdfCanvasPage({
             aria-hidden="true"
           />
         ) : null}
-        {onCreateAnnotation && onSelectAnnotation && onUpdateAnnotationRect ? (
+        {onCreateAnnotation &&
+        onSelectAnnotation &&
+        onUpdateAnnotationRect &&
+        onUpdateAnnotationNoteText ? (
           <AnnotationOverlay
             pageNumber={pageNumber}
             annotations={annotations}
@@ -126,6 +131,7 @@ export function PdfCanvasPage({
             onCreateAnnotation={onCreateAnnotation}
             onSelectAnnotation={onSelectAnnotation}
             onUpdateAnnotationRect={onUpdateAnnotationRect}
+            onUpdateAnnotationNoteText={onUpdateAnnotationNoteText}
           />
         ) : null}
       </div>

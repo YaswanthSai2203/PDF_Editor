@@ -20,6 +20,7 @@ interface AnnotationOverlayProps {
     annotationId: string,
     rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
   ) => void;
+  onUpdateAnnotationNoteText: (annotationId: string, noteText: string) => void;
 }
 
 function clampPct(input: number): number {
@@ -46,6 +47,7 @@ export function AnnotationOverlay({
   onCreateAnnotation,
   onSelectAnnotation,
   onUpdateAnnotationRect,
+  onUpdateAnnotationNoteText,
 }: AnnotationOverlayProps) {
   function handleOverlayClick(event: MouseEvent<HTMLDivElement>) {
     if (activeTool === "SELECT") {
@@ -147,46 +149,59 @@ export function AnnotationOverlay({
             aria-label={`Annotation ${annotation.id}`}
           >
             {isSelected ? (
-              <span
-                className="absolute right-[-5px] bottom-[-5px] h-2.5 w-2.5 rounded-full border border-white bg-zinc-700"
-                onMouseDown={(event) => {
-                  if (activeTool !== "SELECT") {
-                    return;
-                  }
+              <>
+                <span
+                  className="absolute right-[-5px] bottom-[-5px] h-2.5 w-2.5 rounded-full border border-white bg-zinc-700"
+                  onMouseDown={(event) => {
+                    if (activeTool !== "SELECT") {
+                      return;
+                    }
 
-                  event.preventDefault();
-                  event.stopPropagation();
-                  const bounds = getOverlayBounds(event.currentTarget);
-                  if (!bounds) {
-                    return;
-                  }
-                  const startX = event.clientX;
-                  const startY = event.clientY;
-                  const startRect = annotation.rect;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const bounds = getOverlayBounds(event.currentTarget);
+                    if (!bounds) {
+                      return;
+                    }
+                    const startX = event.clientX;
+                    const startY = event.clientY;
+                    const startRect = annotation.rect;
 
-                  const overlayWidth = bounds.width;
-                  const overlayHeight = bounds.height;
+                    const overlayWidth = bounds.width;
+                    const overlayHeight = bounds.height;
 
-                  function handleMove(moveEvent: globalThis.MouseEvent) {
-                    const deltaXPct = toPct(moveEvent.clientX - startX, overlayWidth);
-                    const deltaYPct = toPct(moveEvent.clientY - startY, overlayHeight);
-                    onUpdateAnnotationRect(annotation.id, {
-                      xPct: startRect.xPct,
-                      yPct: startRect.yPct,
-                      widthPct: clampPct(Math.max(2, startRect.widthPct + deltaXPct)),
-                      heightPct: clampPct(Math.max(2, startRect.heightPct + deltaYPct)),
-                    });
-                  }
+                    function handleMove(moveEvent: globalThis.MouseEvent) {
+                      const deltaXPct = toPct(moveEvent.clientX - startX, overlayWidth);
+                      const deltaYPct = toPct(moveEvent.clientY - startY, overlayHeight);
+                      onUpdateAnnotationRect(annotation.id, {
+                        xPct: startRect.xPct,
+                        yPct: startRect.yPct,
+                        widthPct: clampPct(Math.max(2, startRect.widthPct + deltaXPct)),
+                        heightPct: clampPct(Math.max(2, startRect.heightPct + deltaYPct)),
+                      });
+                    }
 
-                  function handleUp() {
-                    window.removeEventListener("mousemove", handleMove);
-                    window.removeEventListener("mouseup", handleUp);
-                  }
+                    function handleUp() {
+                      window.removeEventListener("mousemove", handleMove);
+                      window.removeEventListener("mouseup", handleUp);
+                    }
 
-                  window.addEventListener("mousemove", handleMove);
-                  window.addEventListener("mouseup", handleUp);
-                }}
-              />
+                    window.addEventListener("mousemove", handleMove);
+                    window.addEventListener("mouseup", handleUp);
+                  }}
+                />
+                {annotation.kind === "NOTE" ? (
+                  <textarea
+                    className="absolute inset-0 resize-none rounded bg-sky-100/80 p-1 text-[10px] text-zinc-900 outline-none"
+                    value={annotation.noteText ?? ""}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) =>
+                      onUpdateAnnotationNoteText(annotation.id, event.target.value)
+                    }
+                    aria-label="Edit note annotation text"
+                  />
+                ) : null}
+              </>
             ) : null}
           </button>
         );
