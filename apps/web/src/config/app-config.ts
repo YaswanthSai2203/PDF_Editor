@@ -5,7 +5,19 @@ export type AppNavigationItem = {
   disabled?: boolean;
 };
 
-export const appConfig: { name: string; navigation: AppNavigationItem[] } = {
+export type WorkspaceItem = {
+  id: string;
+  name: string;
+};
+
+export type AppConfig = {
+  name: string;
+  navigation: AppNavigationItem[];
+  workspaces: WorkspaceItem[];
+  defaultWorkspaceId: string;
+};
+
+export const appConfig: AppConfig = {
   name: "NimbusPDF",
   navigation: [
     {
@@ -38,4 +50,10 @@ export const appConfig: { name: string; navigation: AppNavigationItem[] } = {
       disabled: true,
     },
   ],
+  workspaces: [
+    { id: "personal", name: "Personal Workspace" },
+    { id: "design-team", name: "Design Team" },
+    { id: "legal-ops", name: "Legal Ops" },
+  ],
+  defaultWorkspaceId: "personal",
 };
