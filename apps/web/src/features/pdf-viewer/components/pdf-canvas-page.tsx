@@ -3,10 +3,12 @@
 import { useEffect, useRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
-import { AnnotationOverlay } from "@/features/annotation/components/annotation-overlay";
-import type { AnnotationEntity } from "@/features/annotation/domain/annotation";
-import type { AnnotationKind } from "@/features/annotation/domain/annotation";
-import type { AnnotationRect } from "@/features/annotation/domain/annotation";
+import { EditorOverlay } from "@/features/editor/components/editor-overlay";
+import type {
+  EditorElementEntity,
+  EditorElementRect,
+  EditorTool,
+} from "@/features/editor/domain/editor-element";
 
 interface PdfCanvasPageProps {
   page: PDFPageProxy | null;
@@ -15,17 +17,20 @@ interface PdfCanvasPageProps {
   className?: string;
   onVisible?: () => void;
   showTextLayer?: boolean;
-  annotations?: AnnotationEntity[];
-  selectedAnnotationId?: string | null;
-  activeTool?: "SELECT" | "HIGHLIGHT" | "NOTE";
-  onCreateAnnotation?: (
+  interactionMode?: "annotate" | "edit";
+  editorElements?: EditorElementEntity[];
+  selectedEditorElementId?: string | null;
+  activeEditorTool?: EditorTool;
+  imageDraftUrl?: string;
+  onCreateEditorElement?: (
     pageNumber: number,
-    kind: AnnotationKind,
-    rect: AnnotationRect,
+    kind: "TEXT" | "IMAGE",
+    rect: EditorElementRect,
+    value?: string,
   ) => void;
-  onSelectAnnotation?: (annotationId: string | null) => void;
-  onUpdateAnnotationRect?: (annotationId: string, rect: AnnotationRect) => void;
-  onUpdateAnnotationNoteText?: (annotationId: string, noteText: string) => void;
+  onSelectEditorElement?: (elementId: string | null) => void;
+  onUpdateEditorElementRect?: (elementId: string, rect: EditorElementRect) => void;
+  onUpdateEditorElementValue?: (elementId: string, value: string) => void;
 }
 
 export function PdfCanvasPage({
@@ -35,13 +40,15 @@ export function PdfCanvasPage({
   className,
   onVisible,
   showTextLayer = false,
-  annotations = [],
-  selectedAnnotationId = null,
-  activeTool = "SELECT",
-  onCreateAnnotation,
-  onSelectAnnotation,
-  onUpdateAnnotationRect,
-  onUpdateAnnotationNoteText,
+  interactionMode = "annotate",
+  editorElements = [],
+  selectedEditorElementId = null,
+  activeEditorTool = "SELECT",
+  imageDraftUrl = "",
+  onCreateEditorElement,
+  onSelectEditorElement,
+  onUpdateEditorElementRect,
+  onUpdateEditorElementValue,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -119,19 +126,24 @@ export function PdfCanvasPage({
             aria-hidden="true"
           />
         ) : null}
-        {onCreateAnnotation &&
-        onSelectAnnotation &&
-        onUpdateAnnotationRect &&
-        onUpdateAnnotationNoteText ? (
-          <AnnotationOverlay
+        {interactionMode === "edit" &&
+        onCreateEditorElement &&
+        onSelectEditorElement &&
+        onUpdateEditorElementRect &&
+        onUpdateEditorElementValue ? (
+          <EditorOverlay
             pageNumber={pageNumber}
-            annotations={annotations}
-            selectedAnnotationId={selectedAnnotationId}
-            activeTool={activeTool}
-            onCreateAnnotation={onCreateAnnotation}
-            onSelectAnnotation={onSelectAnnotation}
-            onUpdateAnnotationRect={onUpdateAnnotationRect}
-            onUpdateAnnotationNoteText={onUpdateAnnotationNoteText}
+            elements={editorElements}
+            selectedElementId={selectedEditorElementId}
+            activeTool={activeEditorTool}
+            imageDraftUrl={imageDraftUrl}
+            onCreateElement={onCreateEditorElement}
+            onSelectElement={onSelectEditorElement}
+            onUpdateElementRect={onUpdateEditorElementRect}
+            onUpdateElementTextContent={onUpdateEditorElementValue}
+            onSelectImageFile={() => {
+              // Image picking is handled in the toolbar on this phase.
+            }}
           />
         ) : null}
       </div>
