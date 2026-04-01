@@ -7,15 +7,20 @@ const defaultPdfUrl =
 interface ViewerPageProps {
   searchParams: Promise<{
     src?: string;
+    docId?: string;
   }>;
 }
 
 export default async function ViewerPage({ searchParams }: ViewerPageProps) {
   const resolvedSearchParams = await searchParams;
-  const sourceUrl =
+  const rawSourceUrl =
     resolvedSearchParams.src && resolvedSearchParams.src.trim()
       ? resolvedSearchParams.src
       : defaultPdfUrl;
+  const docId = resolvedSearchParams.docId?.trim();
+  const sourceUrl = docId
+    ? `${rawSourceUrl}${rawSourceUrl.includes("?") ? "&" : "?"}docId=${encodeURIComponent(docId)}`
+    : rawSourceUrl;
 
   return (
     <div className="h-full p-4 md:p-6">

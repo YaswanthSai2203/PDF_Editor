@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum PlanTier {
@@ -42,6 +41,11 @@ enum AnnotationKind {
   DRAW
   SHAPE
   STAMP
+}
+
+enum EditorElementKind {
+  TEXT
+  IMAGE
 }
 
 enum SignatureRequestStatus {
@@ -100,6 +104,9 @@ model User {
   comments        Comment[]
   activityEvents  ActivityEvent[]
   annotationEdits Annotation[]  @relation("AnnotationAuthor")
+  versionEdits    DocumentVersion[] @relation("DocumentVersionCreatedBy")
+  annotationReviewEdits Annotation[] @relation("AnnotationLastEditedBy")
+  formSubmissions FormSubmission[]
 }
 
 model Organization {
@@ -146,12 +153,30 @@ model Document {
   versions         DocumentVersion[] @relation("DocumentVersions")
   pageArtifacts    PageArtifact[]
   annotations      Annotation[]
+  editorElements   EditorElement[]
   signatureRequest SignatureRequest[]
   formFields       FormField[]
   comments         Comment[]
   ocrJobs          OcrJob[]
   activityEvents   ActivityEvent[]
 
+  @@index([organizationId, createdAt])
+}
+
+model EditorElement {
+  id             String            @id @default(cuid())
+  organizationId String
+  documentId     String
+  pageNumber     Int
+  kind           EditorElementKind
+  payloadJson    Json
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, pageNumber])
   @@index([organizationId, createdAt])
 }
 
@@ -170,8 +195,10 @@ model DocumentVersion {
 
   document         Document              @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
   currentFor       Document?             @relation("CurrentDocumentVersion")
-  createdBy        User?                 @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy        User?                 @relation("DocumentVersionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   annotationEvents AnnotationEvent[]
+  pageArtifacts    PageArtifact[]
+  ocrJobs          OcrJob[]
 
   @@unique([documentId, versionNumber])
   @@index([organizationId, createdAt])
@@ -212,7 +239,7 @@ model Annotation {
 
   document       Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
   createdBy      User?             @relation("AnnotationAuthor", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  lastEditedBy   User?             @relation(fields: [lastEditedByUserId], references: [id], onDelete: SetNull)
+  lastEditedBy   User?             @relation("AnnotationLastEditedBy", fields: [lastEditedByUserId], references: [id], onDelete: SetNull)
   events         AnnotationEvent[]
 
   @@index([documentId, pageNumber])

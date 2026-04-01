@@ -6,7 +6,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  Image as ImageIcon,
+  Link2,
   LayoutTemplate,
+  Upload,
   Type,
   ZoomIn,
   ZoomOut,
@@ -15,6 +18,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { EditorToolbar } from "@/features/editor/components/editor-toolbar";
+import type { EditorElementKind } from "@/features/editor/domain/editor-element";
+import type { EditorElementRect } from "@/features/editor/domain/editor-element";
+import { useEditorStore } from "@/features/editor/services/editor-store";
+import {
+  createEditorElementOnServer,
+  deleteEditorElementOnServer,
+  enqueueEditorRectSync,
+  enqueueEditorTextSync,
+  fetchEditorElements,
+} from "@/features/editor/services/editor-api";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
@@ -29,6 +43,26 @@ type FitMode = "width" | "page";
 
 interface PdfViewerProps {
   sourceUrl: string;
+}
+
+type InteractionMode = "annotate" | "edit";
+
+function toViewerSource(url: string): string {
+  const trimmed = url.trim();
+  return trimmed.length > 0 ? trimmed : "";
+}
+
+function deriveDocumentKey(source: string): { documentKey: string; documentId: string | null } {
+  try {
+    const parsed = new URL(source, "https://viewer.local");
+    const documentId = parsed.searchParams.get("docId");
+    parsed.searchParams.delete("docId");
+    const query = parsed.searchParams.toString();
+    const normalized = query ? `${parsed.pathname}?${query}` : parsed.pathname;
+    return { documentKey: normalized, documentId };
+  } catch {
+    return { documentKey: source, documentId: null };
+  }
 }
 
 function buildWindow(center: number, total: number, radius: number): number[] {
@@ -50,6 +84,14 @@ function hasPageLoaded(
 
 export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
+  const [runtimeSourceUrl, setRuntimeSourceUrl] = useState<string>(sourceUrl);
+  const [sourceInputValue, setSourceInputValue] = useState<string>(sourceUrl);
+  const { documentKey, documentId: persistedDocumentId } = useMemo(
+    () => deriveDocumentKey(runtimeSourceUrl),
+    [runtimeSourceUrl],
+  );
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>("edit");
+  const [imageDraftUrl, setImageDraftUrl] = useState<string>("");
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<Record<number, PDFPageProxy>>({});
@@ -63,12 +105,40 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
+  const editorElementsByDocument = useEditorStore((state) => state.elementsByDocument);
+  const editorSelectedElementId = useEditorStore((state) => state.selectedElementId);
+  const editorActiveTool = useEditorStore((state) => state.activeTool);
+  const setEditorActiveTool = useEditorStore((state) => state.setActiveTool);
+  const selectEditorElement = useEditorStore((state) => state.selectElement);
+  const setDocumentElements = useEditorStore((state) => state.setDocumentElements);
+  const createElement = useEditorStore((state) => state.createElement);
+  const replaceElement = useEditorStore((state) => state.replaceElement);
+  const deleteElement = useEditorStore((state) => state.deleteElement);
+  const updateElementRect = useEditorStore((state) => state.updateElementRect);
+  const updateElementTextContent = useEditorStore(
+    (state) => state.updateElementTextContent,
+  );
+  const getElementById = useEditorStore((state) => state.getElementById);
+  const editorUndo = useEditorStore((state) => state.undo);
+  const editorRedo = useEditorStore((state) => state.redo);
+  const editorCanUndo = useEditorStore((state) => state.canUndo(documentKey));
+  const editorCanRedo = useEditorStore((state) => state.canRedo(documentKey));
+
+  useEffect(() => {
+    setRuntimeSourceUrl(sourceUrl);
+    setSourceInputValue(sourceUrl);
+  }, [sourceUrl]);
 
   useEffect(() => {
     let isCancelled = false;
+    setIsInitialLoading(true);
+    setPdfDocument(null);
+    setPages({});
+    setThumbnailPages({});
+    setPageNumber(1);
 
     void loader
-      .load({ sourceUrl })
+      .load({ sourceUrl: runtimeSourceUrl })
       .then((pdfDoc) => {
         if (isCancelled) {
           return;
@@ -112,7 +182,31 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     return () => {
       isCancelled = true;
     };
-  }, [loader, sourceUrl]);
+  }, [loader, runtimeSourceUrl]);
+
+  useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentElements(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchEditorElements(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setDocumentElements(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load saved editor elements.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setDocumentElements]);
 
   useEffect(() => {
     if (!pdfDocument) {
@@ -221,6 +315,10 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const canGoForward = totalPages > 0 && pageNumber < totalPages;
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
+  const allCurrentDocumentEditorElements = editorElementsByDocument[documentKey] ?? [];
+  const canDeleteEditorSelection = allCurrentDocumentEditorElements.some(
+    (item) => item.id === editorSelectedElementId,
+  );
 
   function scrollToPage(targetPageNumber: number) {
     const boundedPageNumber = Math.max(1, Math.min(targetPageNumber, totalPages || 1));
@@ -234,8 +332,155 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     });
   }
 
+  function handleApplySourceInput() {
+    const next = toViewerSource(sourceInputValue);
+    if (!next) {
+      return;
+    }
+    setRuntimeSourceUrl(next);
+    setPageNumber(1);
+    setError(null);
+  }
+
+  function handleLocalPdfUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+    if (file.type !== "application/pdf") {
+      setError("Only PDF files are supported.");
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setRuntimeSourceUrl(objectUrl);
+    setSourceInputValue(objectUrl);
+    setPageNumber(1);
+    setError(null);
+  }
+
+  function handleLocalImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setError("Only image files are supported for image elements.");
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setImageDraftUrl(objectUrl);
+    setEditorActiveTool("IMAGE");
+    setError(null);
+  }
+
+  function handleCreateEditorElement(
+    targetPageNumber: number,
+    kind: EditorElementKind,
+    rect: EditorElementRect,
+    value?: string,
+  ) {
+    const created = createElement({
+      documentKey,
+      pageNumber: targetPageNumber,
+      kind,
+      rect,
+      textContent: kind === "TEXT" ? value : undefined,
+      imageSrc: kind === "IMAGE" ? value : undefined,
+    });
+
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    void createEditorElementOnServer(persistedDocumentId, created)
+      .then((saved) => {
+        replaceElement(documentKey, created.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to persist editor element. Keeping local change.");
+      });
+  }
+
+  function handleUpdateEditorElementRect(elementId: string, rect: EditorElementRect) {
+    updateElementRect(documentKey, elementId, rect);
+    const target = getElementById(documentKey, elementId);
+    if (!target?.persisted) {
+      return;
+    }
+    enqueueEditorRectSync(elementId, rect, target.syncVersion ?? 0);
+  }
+
+  function handleUpdateEditorElementValue(elementId: string, value: string) {
+    const target = getElementById(documentKey, elementId);
+    if (!target) {
+      return;
+    }
+
+    if (target.kind === "TEXT") {
+      updateElementTextContent(documentKey, elementId, value);
+      const latest = getElementById(documentKey, elementId);
+      if (!latest?.persisted) {
+        return;
+      }
+      enqueueEditorTextSync(
+        elementId,
+        value,
+        {
+          color: latest.textStyle?.color ?? "#111827",
+          fontSizePx: latest.textStyle?.fontSizePx ?? 16,
+        },
+        latest.syncVersion ?? 0,
+      );
+    }
+  }
+
+  function handleDeleteEditorSelection() {
+    if (!editorSelectedElementId) {
+      return;
+    }
+    const target = allCurrentDocumentEditorElements.find(
+      (item) => item.id === editorSelectedElementId,
+    );
+    deleteElement(documentKey, editorSelectedElementId);
+    if (!target?.persisted) {
+      return;
+    }
+    void deleteEditorElementOnServer(editorSelectedElementId).catch(() => {
+      setError("Failed to delete editor element on server.");
+    });
+  }
+
   return (
     <section className="flex h-full min-h-[70vh] flex-col overflow-hidden">
+      <div className="border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            className="min-w-[240px] flex-1"
+            value={sourceInputValue}
+            onChange={(event) => setSourceInputValue(event.target.value)}
+            placeholder="Paste a direct PDF URL"
+            aria-label="PDF source URL"
+          />
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={handleApplySourceInput}
+          >
+            <Link2 className="h-4 w-4" />
+            Load URL
+          </Button>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900">
+            <Upload className="h-4 w-4" />
+            Upload PDF
+            <input
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              onChange={(event) =>
+                handleLocalPdfUpload(event.target.files?.[0] ?? null)
+              }
+            />
+          </label>
+        </div>
+      </div>
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <div className="flex items-center gap-2">
           <Button
@@ -283,7 +528,55 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
           </Button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <div className="inline-flex items-center gap-1 rounded-md border border-zinc-300 p-1 dark:border-zinc-700">
+            <Button
+              size="sm"
+              variant={interactionMode === "annotate" ? "secondary" : "ghost"}
+              onClick={() => setInteractionMode("annotate")}
+            >
+              Annotate
+            </Button>
+            <Button
+              size="sm"
+              variant={interactionMode === "edit" ? "secondary" : "ghost"}
+              onClick={() => setInteractionMode("edit")}
+            >
+              Edit
+            </Button>
+          </div>
+
+          {interactionMode === "edit" ? (
+            <>
+              <EditorToolbar
+                activeTool={editorActiveTool}
+                onToolChange={setEditorActiveTool}
+                canDeleteSelection={canDeleteEditorSelection}
+                onDeleteSelection={handleDeleteEditorSelection}
+                canUndo={editorCanUndo}
+                canRedo={editorCanRedo}
+                onUndo={() => editorUndo(documentKey)}
+                onRedo={() => editorRedo(documentKey)}
+              />
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900">
+                <ImageIcon className="h-4 w-4" />
+                Image source
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(event) =>
+                    handleLocalImageUpload(event.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+            </>
+          ) : (
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              Annotation mode is planned next on this branch.
+            </span>
+          )}
+
           <Button
             size="icon"
             variant="outline"
@@ -384,9 +677,21 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                 </div>
                 <PdfCanvasPage
                   page={pages[renderPageNumber] ?? null}
+                  pageNumber={renderPageNumber}
                   scale={fitMode === "page" ? Math.min(scale, 1.2) : scale}
                   onVisible={() => setPageNumber(renderPageNumber)}
                   showTextLayer={showTextLayer}
+                  interactionMode={interactionMode}
+                  editorElements={allCurrentDocumentEditorElements.filter(
+                    (item) => item.pageNumber === renderPageNumber,
+                  )}
+                  selectedEditorElementId={editorSelectedElementId}
+                  activeEditorTool={editorActiveTool}
+                  imageDraftUrl={imageDraftUrl}
+                  onCreateEditorElement={handleCreateEditorElement}
+                  onSelectEditorElement={selectEditorElement}
+                  onUpdateEditorElementRect={handleUpdateEditorElementRect}
+                  onUpdateEditorElementValue={handleUpdateEditorElementValue}
                 />
               </div>
             ))}

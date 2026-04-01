@@ -3,20 +3,52 @@
 import { useEffect, useRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
+import { EditorOverlay } from "@/features/editor/components/editor-overlay";
+import type {
+  EditorElementEntity,
+  EditorElementRect,
+  EditorTool,
+} from "@/features/editor/domain/editor-element";
+
 interface PdfCanvasPageProps {
   page: PDFPageProxy | null;
+  pageNumber: number;
   scale: number;
   className?: string;
   onVisible?: () => void;
   showTextLayer?: boolean;
+  interactionMode?: "annotate" | "edit";
+  editorElements?: EditorElementEntity[];
+  selectedEditorElementId?: string | null;
+  activeEditorTool?: EditorTool;
+  imageDraftUrl?: string;
+  onCreateEditorElement?: (
+    pageNumber: number,
+    kind: "TEXT" | "IMAGE",
+    rect: EditorElementRect,
+    value?: string,
+  ) => void;
+  onSelectEditorElement?: (elementId: string | null) => void;
+  onUpdateEditorElementRect?: (elementId: string, rect: EditorElementRect) => void;
+  onUpdateEditorElementValue?: (elementId: string, value: string) => void;
 }
 
 export function PdfCanvasPage({
   page,
+  pageNumber,
   scale,
   className,
   onVisible,
   showTextLayer = false,
+  interactionMode = "annotate",
+  editorElements = [],
+  selectedEditorElementId = null,
+  activeEditorTool = "SELECT",
+  imageDraftUrl = "",
+  onCreateEditorElement,
+  onSelectEditorElement,
+  onUpdateEditorElementRect,
+  onUpdateEditorElementValue,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +124,26 @@ export function PdfCanvasPage({
             ref={textLayerRef}
             className="pointer-events-none absolute inset-0 rounded bg-transparent"
             aria-hidden="true"
+          />
+        ) : null}
+        {interactionMode === "edit" &&
+        onCreateEditorElement &&
+        onSelectEditorElement &&
+        onUpdateEditorElementRect &&
+        onUpdateEditorElementValue ? (
+          <EditorOverlay
+            pageNumber={pageNumber}
+            elements={editorElements}
+            selectedElementId={selectedEditorElementId}
+            activeTool={activeEditorTool}
+            imageDraftUrl={imageDraftUrl}
+            onCreateElement={onCreateEditorElement}
+            onSelectElement={onSelectEditorElement}
+            onUpdateElementRect={onUpdateEditorElementRect}
+            onUpdateElementTextContent={onUpdateEditorElementValue}
+            onSelectImageFile={() => {
+              // Image picking is handled in the toolbar on this phase.
+            }}
           />
         ) : null}
       </div>
