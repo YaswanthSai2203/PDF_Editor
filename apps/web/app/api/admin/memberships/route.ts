@@ -5,24 +5,8 @@ import {
   createMembershipRequestSchema,
   listOrganizationQuerySchema,
 } from "@/features/admin/services/admin-api.types";
+import { resolveOrganizationId } from "../route-utils";
 import { prisma } from "@/lib/prisma";
-
-async function resolveOrganizationId(input: {
-  organizationId?: string;
-  documentId?: string;
-}): Promise<string | null> {
-  if (input.organizationId) {
-    return input.organizationId;
-  }
-  if (!input.documentId) {
-    return null;
-  }
-  const document = await prisma.document.findUnique({
-    where: { id: input.documentId },
-    select: { organizationId: true },
-  });
-  return document?.organizationId ?? null;
-}
 
 function mapMembershipRecord(
   membership: {

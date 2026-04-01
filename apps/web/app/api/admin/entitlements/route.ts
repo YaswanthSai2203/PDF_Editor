@@ -5,23 +5,7 @@ import {
   createEntitlementRequestSchema,
 } from "@/features/admin/services/admin-api.types";
 import { prisma } from "@/lib/prisma";
-
-async function resolveOrganizationId(input: {
-  organizationId?: string;
-  documentId?: string;
-}): Promise<string | null> {
-  if (input.organizationId) {
-    return input.organizationId;
-  }
-  if (!input.documentId) {
-    return null;
-  }
-  const document = await prisma.document.findUnique({
-    where: { id: input.documentId },
-    select: { organizationId: true },
-  });
-  return document?.organizationId ?? null;
-}
+import { resolveOrganizationId } from "../route-utils";
 
 function mapEntitlementRecord(record: {
   id: string;

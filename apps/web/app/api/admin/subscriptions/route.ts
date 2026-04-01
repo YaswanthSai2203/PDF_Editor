@@ -4,6 +4,7 @@ import {
   createSubscriptionRequestSchema,
   listOrganizationQuerySchema,
 } from "@/features/admin/services/admin-api.types";
+import { resolveOrganizationId } from "../route-utils";
 import { prisma } from "@/lib/prisma";
 
 function mapSubscriptionRecord(record: {
@@ -46,14 +47,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const resolvedOrganizationId = parsed.data.organizationId
-    ? parsed.data.organizationId
-    : (
-        await prisma.document.findUnique({
-          where: { id: parsed.data.documentId },
-          select: { organizationId: true },
-        })
-      )?.organizationId;
+  const resolvedOrganizationId = await resolveOrganizationId(parsed.data);
 
   if (!resolvedOrganizationId) {
     return NextResponse.json({ error: "Organization not found." }, { status: 404 });
@@ -82,14 +76,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const resolvedOrganizationId = parsed.data.organizationId
-    ? parsed.data.organizationId
-    : (
-        await prisma.document.findUnique({
-          where: { id: parsed.data.documentId },
-          select: { organizationId: true },
-        })
-      )?.organizationId;
+  const resolvedOrganizationId = await resolveOrganizationId(parsed.data);
 
   if (!resolvedOrganizationId) {
     return NextResponse.json({ error: "Organization not found." }, { status: 404 });
