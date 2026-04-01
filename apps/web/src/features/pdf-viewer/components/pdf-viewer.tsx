@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  Link2,
   LayoutTemplate,
+  Upload,
   Type,
   ZoomIn,
   ZoomOut,
@@ -42,6 +44,11 @@ interface PdfViewerProps {
   sourceUrl: string;
 }
 
+function toViewerSource(url: string): string {
+  const trimmed = url.trim();
+  return trimmed.length > 0 ? trimmed : "";
+}
+
 function deriveDocumentKey(sourceUrl: string): { documentKey: string; documentId: string | null } {
   try {
     const parsed = new URL(sourceUrl, "https://viewer.local");
@@ -74,9 +81,11 @@ function hasPageLoaded(
 
 export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
+  const [runtimeSourceUrl, setRuntimeSourceUrl] = useState<string>(sourceUrl);
+  const [sourceInputValue, setSourceInputValue] = useState<string>(sourceUrl);
   const { documentKey, documentId: persistedDocumentId } = useMemo(
-    () => deriveDocumentKey(sourceUrl),
-    [sourceUrl],
+    () => deriveDocumentKey(runtimeSourceUrl),
+    [runtimeSourceUrl],
   );
   const annotationsByDocument = useAnnotationStore(
     (state) => state.annotationsByDocument,
@@ -119,10 +128,15 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   );
 
   useEffect(() => {
+    setRuntimeSourceUrl(sourceUrl);
+    setSourceInputValue(sourceUrl);
+  }, [sourceUrl]);
+
+  useEffect(() => {
     let isCancelled = false;
 
     void loader
-      .load({ sourceUrl })
+      .load({ sourceUrl: runtimeSourceUrl })
       .then((pdfDoc) => {
         if (isCancelled) {
           return;
@@ -166,7 +180,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     return () => {
       isCancelled = true;
     };
-  }, [loader, sourceUrl]);
+  }, [loader, runtimeSourceUrl]);
 
   useEffect(() => {
     if (!persistedDocumentId) {
@@ -381,8 +395,66 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     enqueueAnnotationNoteTextSync(annotationId, noteText, target.syncVersion ?? 0);
   }
 
+  function handleApplySourceInput() {
+    const next = toViewerSource(sourceInputValue);
+    if (!next) {
+      return;
+    }
+    setRuntimeSourceUrl(next);
+    setPageNumber(1);
+    setError(null);
+  }
+
+  function handleLocalPdfUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    if (file.type !== "application/pdf") {
+      setError("Only PDF files are supported.");
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setRuntimeSourceUrl(objectUrl);
+    setSourceInputValue(objectUrl);
+    setPageNumber(1);
+    setError(null);
+  }
+
   return (
     <section className="flex h-full min-h-[70vh] flex-col overflow-hidden">
+      <div className="border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            className="min-w-[240px] flex-1"
+            value={sourceInputValue}
+            onChange={(event) => setSourceInputValue(event.target.value)}
+            placeholder="Paste a direct PDF URL"
+            aria-label="PDF source URL"
+          />
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={handleApplySourceInput}
+          >
+            <Link2 className="h-4 w-4" />
+            Load URL
+          </Button>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900">
+            <Upload className="h-4 w-4" />
+            Upload PDF
+            <input
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              onChange={(event) =>
+                handleLocalPdfUpload(event.target.files?.[0] ?? null)
+              }
+            />
+          </label>
+        </div>
+      </div>
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <div className="flex items-center gap-2">
           <Button
