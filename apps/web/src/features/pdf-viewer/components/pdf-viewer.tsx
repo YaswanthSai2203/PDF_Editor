@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Columns3,
   FileSignature,
+  ScanText,
   GripVertical,
   Image as ImageIcon,
   Link2,
@@ -58,6 +59,9 @@ import {
   updateFormFieldOnServer,
 } from "@/features/forms/services/forms-api";
 import { useFormsStore } from "@/features/forms/services/forms-store";
+import { OcrPanel } from "@/features/ocr/components/ocr-panel";
+import { createOcrJobOnServer, fetchOcrJobs } from "@/features/ocr/services/ocr-api";
+import { useOcrStore } from "@/features/ocr/services/ocr-store";
 import { SignaturePanel } from "@/features/signature/components/signature-panel";
 import type {
   CreateSignatureRequestInput,
@@ -208,6 +212,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(false);
   const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(false);
   const [showFormsPanel, setShowFormsPanel] = useState<boolean>(false);
+  const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -264,6 +269,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const selectFormField = useFormsStore((state) => state.selectField);
   const setFormFieldValue = useFormsStore((state) => state.setFieldValue);
   const clearFormFieldValue = useFormsStore((state) => state.clearFieldValue);
+  const ocrJobsByDocument = useOcrStore((state) => state.jobsByDocument);
+  const selectedOcrJobId = useOcrStore(
+    (state) => state.selectedJobIdByDocument[documentKey] ?? null,
+  );
+  const setDocumentOcrJobs = useOcrStore((state) => state.setDocumentJobs);
+  const upsertOcrJob = useOcrStore((state) => state.upsertJob);
+  const setOcrJobResults = useOcrStore((state) => state.setJobResults);
+  const selectOcrJob = useOcrStore((state) => state.selectJob);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -422,6 +435,39 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   }, [documentKey, persistedDocumentId, setDocumentFormFields]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentOcrJobs(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchOcrJobs(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (isCancelled) {
+          return;
+        }
+        setDocumentOcrJobs(documentKey, loaded);
+        loaded.forEach((job) => {
+          setOcrJobResults(job.id, job.results);
+        });
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load OCR jobs.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    documentKey,
+    persistedDocumentId,
+    setDocumentOcrJobs,
+    setOcrJobResults,
+  ]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
@@ -540,8 +586,15 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const allCurrentDocumentSignatureRequests =
     signatureRequestsByDocument[documentKey] ?? [];
   const allCurrentDocumentFormFields = formFieldsByDocument[documentKey] ?? [];
+  const allCurrentDocumentOcrJobs = ocrJobsByDocument[documentKey] ?? [];
   const selectedSignatureRequest =
     getSelectedSignatureRequest(documentKey) ?? null;
+  const selectedOcrJob =
+    allCurrentDocumentOcrJobs.find((job) => job.id === selectedOcrJobId) ?? null;
+  const selectedOcrResults = selectedOcrJob?.results ?? [];
+  const activePageOcrText =
+    selectedOcrResults.find((result) => result.pageNumber === pageNumber)?.text ??
+    "";
   const canDeleteEditorSelection = allCurrentDocumentEditorElements.some(
     (item) => item.id === editorSelectedElementId,
   );
@@ -879,6 +932,29 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     });
   }
 
+  function handleRunOcr() {
+    if (!persistedDocumentId) {
+      setError("Attach a persisted document (docId) before running OCR.");
+      return;
+    }
+
+    void createOcrJobOnServer({
+      documentId: persistedDocumentId,
+      documentKey,
+      provider: "mock-ocr",
+      pageCountHint: totalPages || 1,
+    })
+      .then((job) => {
+        upsertOcrJob(documentKey, job);
+        setOcrJobResults(job.id, job.results);
+        selectOcrJob(documentKey, job.id);
+        setError(null);
+      })
+      .catch(() => {
+        setError("Failed to start OCR job.");
+      });
+  }
+
   function handleApplySourceInput() {
     const next = toViewerSource(sourceInputValue);
     if (!next) {
@@ -1169,6 +1245,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               <FileSignature className="mr-1 h-4 w-4" />
               Forms
             </Button>
+            <Button
+              size="sm"
+              variant={showOcrPanel ? "secondary" : "ghost"}
+              onClick={() => setShowOcrPanel((current) => !current)}
+            >
+              <ScanText className="mr-1 h-4 w-4" />
+              OCR
+            </Button>
           </div>
 
           <Button
@@ -1236,19 +1320,33 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       <div
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
-          showOrganizerPanel && showSignaturePanel && showFormsPanel
-            ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
-            : showOrganizerPanel && showSignaturePanel
-              ? "md:grid-cols-[220px_1fr_320px_360px]"
-              : showOrganizerPanel && showFormsPanel
-                ? "md:grid-cols-[220px_1fr_320px_360px]"
-                : showSignaturePanel && showFormsPanel
-                  ? "md:grid-cols-[220px_1fr_360px_360px]"
-                  : showOrganizerPanel
-                    ? "md:grid-cols-[220px_1fr_320px]"
-                    : showSignaturePanel || showFormsPanel
-                      ? "md:grid-cols-[220px_1fr_360px]"
-                      : "md:grid-cols-[220px_1fr]",
+          showOrganizerPanel && showSignaturePanel && showFormsPanel && showOcrPanel
+            ? "md:grid-cols-[220px_1fr_320px_360px_360px_360px]"
+            : showOrganizerPanel && showSignaturePanel && showFormsPanel
+              ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+              : showOrganizerPanel && showSignaturePanel && showOcrPanel
+                ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+                : showOrganizerPanel && showFormsPanel && showOcrPanel
+                  ? "md:grid-cols-[220px_1fr_320px_360px_360px]"
+                  : showSignaturePanel && showFormsPanel && showOcrPanel
+                    ? "md:grid-cols-[220px_1fr_360px_360px_360px]"
+                    : showOrganizerPanel && showSignaturePanel
+                      ? "md:grid-cols-[220px_1fr_320px_360px]"
+                      : showOrganizerPanel && showFormsPanel
+                        ? "md:grid-cols-[220px_1fr_320px_360px]"
+                        : showOrganizerPanel && showOcrPanel
+                          ? "md:grid-cols-[220px_1fr_320px_360px]"
+                          : showSignaturePanel && showFormsPanel
+                            ? "md:grid-cols-[220px_1fr_360px_360px]"
+                            : showSignaturePanel && showOcrPanel
+                              ? "md:grid-cols-[220px_1fr_360px_360px]"
+                              : showFormsPanel && showOcrPanel
+                                ? "md:grid-cols-[220px_1fr_360px_360px]"
+                                : showOrganizerPanel
+                                  ? "md:grid-cols-[220px_1fr_320px]"
+                                  : showSignaturePanel || showFormsPanel || showOcrPanel
+                                    ? "md:grid-cols-[220px_1fr_360px]"
+                                    : "md:grid-cols-[220px_1fr]",
         )}
       >
         <aside
@@ -1375,6 +1473,18 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                 }
                 handleSubmitFormFieldValue(fieldId, String(target.value ?? ""));
               }}
+            />
+          </aside>
+        ) : null}
+        {showOcrPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <OcrPanel
+              jobs={allCurrentDocumentOcrJobs}
+              activePageNumber={pageNumber}
+              activePageText={activePageOcrText}
+              canRunJob={Boolean(persistedDocumentId && totalPages)}
+              onRunJob={handleRunOcr}
+              onSelectJob={(jobId) => selectOcrJob(documentKey, jobId)}
             />
           </aside>
         ) : null}
