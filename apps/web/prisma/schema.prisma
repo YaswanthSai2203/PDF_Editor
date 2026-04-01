@@ -1,0 +1,426 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanTier {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum DocumentStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum DocumentVersionSource {
+  UPLOAD
+  EDIT
+  IMPORT
+  OCR
+  SIGNATURE
+  API
+}
+
+enum AnnotationKind {
+  HIGHLIGHT
+  NOTE
+  FREE_TEXT
+  DRAW
+  SHAPE
+  STAMP
+}
+
+enum SignatureRequestStatus {
+  DRAFT
+  SENT
+  COMPLETED
+  DECLINED
+  EXPIRED
+}
+
+enum SignatureRecipientStatus {
+  PENDING
+  OPENED
+  SIGNED
+  DECLINED
+}
+
+enum FormFieldType {
+  TEXT
+  TEXTAREA
+  CHECKBOX
+  RADIO
+  SELECT
+  DATE
+  SIGNATURE
+}
+
+enum OcrJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ActivityType {
+  DOCUMENT_UPLOADED
+  DOCUMENT_VERSION_CREATED
+  ANNOTATION_CREATED
+  ANNOTATION_UPDATED
+  SIGNATURE_REQUESTED
+  SIGNATURE_COMPLETED
+  OCR_REQUESTED
+  OCR_COMPLETED
+  COMMENT_ADDED
+}
+
+model User {
+  id              String        @id @default(cuid())
+  email           String        @unique
+  name            String?
+  avatarUrl       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  memberships     Membership[]
+  documents       Document[]    @relation("DocumentCreatedBy")
+  comments        Comment[]
+  activityEvents  ActivityEvent[]
+  annotationEdits Annotation[]  @relation("AnnotationAuthor")
+}
+
+model Organization {
+  id             String         @id @default(cuid())
+  name           String
+  slug           String         @unique
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  planTier       PlanTier       @default(FREE)
+  memberships    Membership[]
+  documents      Document[]
+  subscriptions  Subscription[]
+  entitlements   Entitlement[]
+  activityEvents ActivityEvent[]
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MembershipRole
+  createdAt      DateTime       @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Document {
+  id               String            @id @default(cuid())
+  organizationId   String
+  createdByUserId  String
+  title            String
+  currentVersionId String?           @unique
+  status           DocumentStatus    @default(ACTIVE)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy        User              @relation("DocumentCreatedBy", fields: [createdByUserId], references: [id])
+  currentVersion   DocumentVersion?  @relation("CurrentDocumentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         DocumentVersion[] @relation("DocumentVersions")
+  pageArtifacts    PageArtifact[]
+  annotations      Annotation[]
+  signatureRequest SignatureRequest[]
+  formFields       FormField[]
+  comments         Comment[]
+  ocrJobs          OcrJob[]
+  activityEvents   ActivityEvent[]
+
+  @@index([organizationId, createdAt])
+}
+
+model DocumentVersion {
+  id              String                @id @default(cuid())
+  documentId      String
+  organizationId  String
+  versionNumber   Int
+  source          DocumentVersionSource
+  storageKey      String
+  checksumSha256  String
+  pageCount       Int
+  metadataJson    Json?
+  createdByUserId String?
+  createdAt       DateTime              @default(now())
+
+  document         Document              @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  currentFor       Document?             @relation("CurrentDocumentVersion")
+  createdBy        User?                 @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  annotationEvents AnnotationEvent[]
+
+  @@unique([documentId, versionNumber])
+  @@index([organizationId, createdAt])
+}
+
+model PageArtifact {
+  id                String   @id @default(cuid())
+  documentId         String
+  documentVersionId  String
+  pageNumber         Int
+  width              Float
+  height             Float
+  rotation           Int      @default(0)
+  thumbnailStorageKey String?
+  metadataJson       Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  document Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version  DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([documentVersionId, pageNumber])
+  @@index([documentId, pageNumber])
+}
+
+model Annotation {
+  id                String         @id @default(cuid())
+  organizationId    String
+  documentId        String
+  pageNumber        Int
+  kind              AnnotationKind
+  payloadJson       Json
+  createdByUserId   String?
+  lastEditedByUserId String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+
+  document       Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy      User?             @relation("AnnotationAuthor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lastEditedBy   User?             @relation(fields: [lastEditedByUserId], references: [id], onDelete: SetNull)
+  events         AnnotationEvent[]
+
+  @@index([documentId, pageNumber])
+  @@index([organizationId, createdAt])
+}
+
+model AnnotationEvent {
+  id                String   @id @default(cuid())
+  annotationId      String
+  documentVersionId String
+  operation         String
+  payloadJson       Json?
+  createdAt         DateTime @default(now())
+
+  annotation      Annotation      @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  documentVersion DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+
+  @@index([annotationId, createdAt])
+}
+
+model SignatureRequest {
+  id              String                 @id @default(cuid())
+  organizationId  String
+  documentId      String
+  title           String
+  status          SignatureRequestStatus @default(DRAFT)
+  message         String?
+  createdByUserId String?
+  completedAt     DateTime?
+  expiresAt       DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  document    Document             @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  recipients  SignatureRecipient[]
+  fields      SignatureField[]
+
+  @@index([organizationId, createdAt])
+  @@index([documentId])
+}
+
+model SignatureRecipient {
+  id                 String                  @id @default(cuid())
+  signatureRequestId String
+  email              String
+  displayName        String?
+  signingOrder       Int                     @default(1)
+  status             SignatureRecipientStatus @default(PENDING)
+  openedAt           DateTime?
+  signedAt           DateTime?
+  declinedReason     String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  signatureRequest SignatureRequest @relation(fields: [signatureRequestId], references: [id], onDelete: Cascade)
+
+  @@index([signatureRequestId, signingOrder])
+}
+
+model SignatureField {
+  id                 String   @id @default(cuid())
+  signatureRequestId String
+  pageNumber         Int
+  x                  Float
+  y                  Float
+  width              Float
+  height             Float
+  required           Boolean  @default(true)
+  assigneeEmail      String?
+  createdAt          DateTime @default(now())
+
+  signatureRequest SignatureRequest @relation(fields: [signatureRequestId], references: [id], onDelete: Cascade)
+
+  @@index([signatureRequestId, pageNumber])
+}
+
+model FormField {
+  id               String        @id @default(cuid())
+  organizationId   String
+  documentId       String
+  fieldType        FormFieldType
+  name             String
+  pageNumber       Int
+  x                Float
+  y                Float
+  width            Float
+  height           Float
+  required         Boolean       @default(false)
+  configJson       Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  document      Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  submissions   FormSubmission[]
+
+  @@unique([documentId, name])
+  @@index([organizationId, documentId])
+}
+
+model FormSubmission {
+  id             String   @id @default(cuid())
+  formFieldId    String
+  submittedById  String?
+  valueJson      Json
+  createdAt      DateTime @default(now())
+
+  formField FormField @relation(fields: [formFieldId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [submittedById], references: [id], onDelete: SetNull)
+
+  @@index([formFieldId, createdAt])
+}
+
+model OcrJob {
+  id              String       @id @default(cuid())
+  organizationId  String
+  documentId      String
+  documentVersionId String
+  status          OcrJobStatus @default(QUEUED)
+  provider        String
+  errorMessage    String?
+  createdByUserId String?
+  createdAt       DateTime     @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  document      Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentVersion DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+  results       OcrResult[]
+
+  @@index([organizationId, status, createdAt])
+}
+
+model OcrResult {
+  id          String   @id @default(cuid())
+  ocrJobId    String
+  pageNumber  Int
+  confidence  Float
+  text        String
+  blocksJson  Json?
+  createdAt   DateTime @default(now())
+
+  ocrJob OcrJob @relation(fields: [ocrJobId], references: [id], onDelete: Cascade)
+
+  @@unique([ocrJobId, pageNumber])
+}
+
+model Comment {
+  id             String   @id @default(cuid())
+  organizationId String
+  documentId     String
+  authorUserId   String?
+  body           String
+  pageNumber     Int?
+  anchorJson     Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User?    @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+}
+
+model ActivityEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  documentId     String?
+  actorUserId    String?
+  type           ActivityType
+  payloadJson    Json?
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     Document?    @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  actor        User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([documentId, createdAt])
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  provider             String
+  providerCustomerId   String
+  providerSubscriptionId String
+  status               String
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubscriptionId])
+  @@index([organizationId])
+}
+
+model Entitlement {
+  id             String   @id @default(cuid())
+  organizationId String
+  featureKey     String
+  enabled        Boolean  @default(false)
+  limitValue     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, featureKey])
+}
