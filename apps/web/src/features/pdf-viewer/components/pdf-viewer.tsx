@@ -12,6 +12,7 @@ import {
   LayoutTemplate,
   RotateCcw,
   RotateCw,
+  Signature,
   Upload,
   Type,
   ZoomIn,
@@ -43,6 +44,20 @@ import {
   fetchPageOperations,
 } from "@/features/page-organizer/services/page-organizer-api";
 import { usePageOrganizerStore } from "@/features/page-organizer/services/page-organizer-store";
+import { SignaturePanel } from "@/features/signature/components/signature-panel";
+import type {
+  CreateSignatureRequestInput,
+  SignatureRecipientInput,
+  SignatureRecipientEntity,
+  SignatureRequestEntity,
+} from "@/features/signature/domain/signature-request";
+import {
+  createSignatureRequestOnServer,
+  fetchSignatureRequests,
+  sendSignatureRequestOnServer,
+  updateSignatureRequestOnServer,
+} from "@/features/signature/services/signature-api";
+import { useSignatureStore } from "@/features/signature/services/signature-store";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
@@ -177,6 +192,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showTextLayer, setShowTextLayer] = useState<boolean>(false);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(false);
+  const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -212,6 +228,18 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const organizerCanUndo = usePageOrganizerStore((state) => state.canUndo(documentKey));
   const organizerCanRedo = usePageOrganizerStore((state) => state.canRedo(documentKey));
   const getOperationById = usePageOrganizerStore((state) => state.getOperationById);
+  const signatureRequestsByDocument = useSignatureStore(
+    (state) => state.requestsByDocument,
+  );
+  const selectedSignatureRequestId = useSignatureStore(
+    (state) => state.selectedRequestIdByDocument[documentKey] ?? null,
+  );
+  const setSignatureRequests = useSignatureStore((state) => state.setDocumentRequests);
+  const createLocalSignatureRequest = useSignatureStore((state) => state.createLocalRequest);
+  const replaceSignatureRequest = useSignatureStore((state) => state.replaceRequest);
+  const updateSignatureRequestStatus = useSignatureStore((state) => state.updateRequestStatus);
+  const getSelectedSignatureRequest = useSignatureStore((state) => state.getSelectedRequest);
+  const selectSignatureRequest = useSignatureStore((state) => state.selectRequest);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -320,6 +348,30 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       isCancelled = true;
     };
   }, [documentKey, persistedDocumentId, setDocumentOperations]);
+
+  useEffect(() => {
+    if (!persistedDocumentId) {
+      setSignatureRequests(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchSignatureRequests(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setSignatureRequests(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load signature requests.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setSignatureRequests]);
 
   useEffect(() => {
     if (!pdfDocument) {
@@ -437,6 +489,10 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
   const allCurrentDocumentEditorElements = editorElementsByDocument[documentKey] ?? [];
+  const allCurrentDocumentSignatureRequests =
+    signatureRequestsByDocument[documentKey] ?? [];
+  const selectedSignatureRequest =
+    getSelectedSignatureRequest(documentKey) ?? null;
   const canDeleteEditorSelection = allCurrentDocumentEditorElements.some(
     (item) => item.id === editorSelectedElementId,
   );
@@ -505,6 +561,138 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     void deletePageOperationOnServer(operationId).catch(() => {
       setError("Failed to delete page operation on server.");
     });
+  }
+
+  function handleCreateSignatureRequest(input: CreateSignatureRequestInput) {
+    const now = new Date().toISOString();
+    const localRecipients: SignatureRecipientEntity[] = input.recipients.map(
+      (recipient, index) => ({
+        id: `sig_rec_local_${Math.random().toString(36).slice(2)}`,
+        signatureRequestId: "",
+        email: recipient.email,
+        displayName: recipient.displayName,
+        signingOrder: recipient.signingOrder ?? index + 1,
+        status: "PENDING",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+
+    const created = createLocalSignatureRequest(documentKey, {
+      documentKey,
+      persistedDocumentId: persistedDocumentId ?? undefined,
+      persisted: false,
+      documentId: input.documentId,
+      title: input.title,
+      message: input.message,
+      expiresAt: input.expiresAt,
+      status: "DRAFT",
+      recipients: localRecipients,
+      completedAt: undefined,
+    });
+
+    selectSignatureRequest(documentKey, created.id);
+
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    void createSignatureRequestOnServer({
+      documentId: persistedDocumentId,
+      documentKey,
+      title: input.title,
+      message: input.message,
+      expiresAt: input.expiresAt,
+      recipients: input.recipients,
+    })
+      .then((saved) => {
+        replaceSignatureRequest(documentKey, created.id, saved);
+        selectSignatureRequest(documentKey, saved.id);
+      })
+      .catch(() => {
+        setError("Failed to create signature request on server.");
+      });
+  }
+
+  function handleUpdateSignatureRequest(
+    requestId: string,
+    updates: {
+      title?: string;
+      message?: string;
+      expiresAt?: string;
+      recipients?: SignatureRecipientInput[];
+    },
+  ) {
+    const existing = allCurrentDocumentSignatureRequests.find(
+      (item) => item.id === requestId,
+    );
+    if (!existing) {
+      return;
+    }
+
+    const mergedLocal: SignatureRequestEntity = {
+      ...existing,
+      ...(typeof updates.title === "string" ? { title: updates.title } : {}),
+      ...(typeof updates.message === "string" ? { message: updates.message } : {}),
+      ...(typeof updates.expiresAt === "string" ? { expiresAt: updates.expiresAt } : {}),
+      ...(updates.recipients
+        ? {
+            recipients: updates.recipients.map((recipient, index) => ({
+              id: existing.recipients[index]?.id ?? `sig_rec_local_${Math.random().toString(36).slice(2)}`,
+              signatureRequestId: existing.id,
+              email: recipient.email,
+              displayName: recipient.displayName,
+              signingOrder: recipient.signingOrder ?? index + 1,
+              status: existing.recipients[index]?.status ?? "PENDING",
+              createdAt: existing.recipients[index]?.createdAt ?? new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            })),
+          }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    replaceSignatureRequest(documentKey, existing.id, mergedLocal);
+
+    if (!existing.persisted || !existing.persistedDocumentId) {
+      return;
+    }
+
+    void updateSignatureRequestOnServer(requestId, documentKey, updates)
+      .then((saved) => {
+        replaceSignatureRequest(documentKey, requestId, {
+          ...saved,
+          documentKey,
+          persistedDocumentId: existing.persistedDocumentId,
+        });
+      })
+      .catch(() => {
+        setError("Failed to update signature request on server.");
+      });
+  }
+
+  function handleSendSignatureRequest(requestId: string) {
+    const existing = allCurrentDocumentSignatureRequests.find(
+      (item) => item.id === requestId,
+    );
+    if (!existing) {
+      return;
+    }
+    if (!existing.persisted || !existing.persistedDocumentId) {
+      setError("Save request before sending.");
+      return;
+    }
+    void sendSignatureRequestOnServer(requestId, documentKey)
+      .then((saved) => {
+        replaceSignatureRequest(documentKey, requestId, {
+          ...saved,
+          documentKey,
+          persistedDocumentId: existing.persistedDocumentId,
+        });
+        updateSignatureRequestStatus(documentKey, requestId, "SENT");
+      })
+      .catch(() => {
+        setError("Failed to send signature request.");
+      });
   }
 
   function handleMovePage(fromOriginalPage: number, toOriginalPage: number) {
@@ -799,6 +987,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             >
               <RotateCw className="h-4 w-4" />
             </Button>
+            <Button
+              size="sm"
+              variant={showSignaturePanel ? "secondary" : "ghost"}
+              onClick={() => setShowSignaturePanel((current) => !current)}
+            >
+              <Signature className="mr-1 h-4 w-4" />
+              Sign
+            </Button>
           </div>
 
           <Button
@@ -866,9 +1062,13 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       <div
         className={cn(
           "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
-          showOrganizerPanel
-            ? "md:grid-cols-[220px_1fr_320px]"
-            : "md:grid-cols-[220px_1fr]",
+          showOrganizerPanel && showSignaturePanel
+            ? "md:grid-cols-[220px_1fr_320px_360px]"
+            : showOrganizerPanel
+              ? "md:grid-cols-[220px_1fr_320px]"
+              : showSignaturePanel
+                ? "md:grid-cols-[220px_1fr_360px]"
+                : "md:grid-cols-[220px_1fr]",
         )}
       >
         <aside
@@ -952,6 +1152,28 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               onRedo={() => organizerRedo(documentKey)}
               operations={allCurrentDocumentOperations}
               onDeleteOperation={handleDeleteOperation}
+            />
+          </aside>
+        ) : null}
+        {showSignaturePanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <SignaturePanel
+              requests={allCurrentDocumentSignatureRequests}
+              selectedRequestId={selectedSignatureRequestId}
+              selectedRequest={selectedSignatureRequest}
+              onSelectRequest={(requestId) => selectSignatureRequest(documentKey, requestId)}
+              onCreateRequest={(input) => {
+                if (!persistedDocumentId) {
+                  setError("Attach a persisted document (docId) before signatures.");
+                  return;
+                }
+                handleCreateSignatureRequest({
+                  ...input,
+                  documentId: persistedDocumentId,
+                });
+              }}
+              onUpdateRequest={handleUpdateSignatureRequest}
+              onSendRequest={handleSendSignatureRequest}
             />
           </aside>
         ) : null}
