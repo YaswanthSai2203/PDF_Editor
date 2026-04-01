@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { FileText, Layers, PenTool, Signature, TextCursorInput } from "lucide-react";
 
+import { AppShellHeader } from "@/components/layout/app-shell-header";
 import { appConfig } from "@/config/app-config";
 import { cn } from "@/lib/utils";
 
@@ -64,7 +65,10 @@ export function AppShell({ children }: AppShellProps) {
         </nav>
       </aside>
 
-      <main className="min-w-0 bg-zinc-50 dark:bg-zinc-950">{children}</main>
+      <main className="min-w-0 bg-zinc-50 dark:bg-zinc-950">
+        <AppShellHeader />
+        <div className="h-[calc(100vh-56px)] overflow-hidden">{children}</div>
+      </main>
     </div>
   );
 }
