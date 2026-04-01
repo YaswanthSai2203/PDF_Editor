@@ -16,10 +16,26 @@ interface AnnotationOverlayProps {
     rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
   ) => void;
   onSelectAnnotation: (annotationId: string | null) => void;
+  onUpdateAnnotationRect: (
+    annotationId: string,
+    rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
+  ) => void;
 }
 
 function clampPct(input: number): number {
   return Math.min(100, Math.max(0, input));
+}
+
+function getOverlayBounds(startElement: HTMLElement): DOMRect | null {
+  const overlay = startElement.closest("[data-annotation-overlay='true']");
+  if (!overlay) {
+    return null;
+  }
+  return overlay.getBoundingClientRect();
+}
+
+function toPct(deltaPx: number, totalPx: number): number {
+  return (deltaPx / totalPx) * 100;
 }
 
 export function AnnotationOverlay({
@@ -29,6 +45,7 @@ export function AnnotationOverlay({
   activeTool,
   onCreateAnnotation,
   onSelectAnnotation,
+  onUpdateAnnotationRect,
 }: AnnotationOverlayProps) {
   function handleOverlayClick(event: MouseEvent<HTMLDivElement>) {
     if (activeTool === "SELECT") {
@@ -56,6 +73,7 @@ export function AnnotationOverlay({
 
   return (
     <div
+      data-annotation-overlay="true"
       className={cn(
         "absolute inset-0 rounded",
         activeTool === "SELECT" ? "cursor-default" : "cursor-crosshair",
@@ -89,8 +107,88 @@ export function AnnotationOverlay({
               event.stopPropagation();
               onSelectAnnotation(annotation.id);
             }}
+            onMouseDown={(event) => {
+              if (activeTool !== "SELECT") {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+              const bounds = getOverlayBounds(event.currentTarget);
+              if (!bounds) {
+                return;
+              }
+              const startX = event.clientX;
+              const startY = event.clientY;
+              const startRect = annotation.rect;
+
+              const overlayWidth = bounds.width;
+              const overlayHeight = bounds.height;
+
+              function handleMove(moveEvent: globalThis.MouseEvent) {
+                const deltaXPct = toPct(moveEvent.clientX - startX, overlayWidth);
+                const deltaYPct = toPct(moveEvent.clientY - startY, overlayHeight);
+                onUpdateAnnotationRect(annotation.id, {
+                  xPct: clampPct(startRect.xPct + deltaXPct),
+                  yPct: clampPct(startRect.yPct + deltaYPct),
+                  widthPct: startRect.widthPct,
+                  heightPct: startRect.heightPct,
+                });
+              }
+
+              function handleUp() {
+                window.removeEventListener("mousemove", handleMove);
+                window.removeEventListener("mouseup", handleUp);
+              }
+
+              window.addEventListener("mousemove", handleMove);
+              window.addEventListener("mouseup", handleUp);
+            }}
             aria-label={`Annotation ${annotation.id}`}
-          />
+          >
+            {isSelected ? (
+              <span
+                className="absolute right-[-5px] bottom-[-5px] h-2.5 w-2.5 rounded-full border border-white bg-zinc-700"
+                onMouseDown={(event) => {
+                  if (activeTool !== "SELECT") {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const bounds = getOverlayBounds(event.currentTarget);
+                  if (!bounds) {
+                    return;
+                  }
+                  const startX = event.clientX;
+                  const startY = event.clientY;
+                  const startRect = annotation.rect;
+
+                  const overlayWidth = bounds.width;
+                  const overlayHeight = bounds.height;
+
+                  function handleMove(moveEvent: globalThis.MouseEvent) {
+                    const deltaXPct = toPct(moveEvent.clientX - startX, overlayWidth);
+                    const deltaYPct = toPct(moveEvent.clientY - startY, overlayHeight);
+                    onUpdateAnnotationRect(annotation.id, {
+                      xPct: startRect.xPct,
+                      yPct: startRect.yPct,
+                      widthPct: clampPct(Math.max(2, startRect.widthPct + deltaXPct)),
+                      heightPct: clampPct(Math.max(2, startRect.heightPct + deltaYPct)),
+                    });
+                  }
+
+                  function handleUp() {
+                    window.removeEventListener("mousemove", handleMove);
+                    window.removeEventListener("mouseup", handleUp);
+                  }
+
+                  window.addEventListener("mousemove", handleMove);
+                  window.addEventListener("mouseup", handleUp);
+                }}
+              />
+            ) : null}
+          </button>
         );
       })}
     </div>

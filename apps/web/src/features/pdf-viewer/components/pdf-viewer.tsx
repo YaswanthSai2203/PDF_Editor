@@ -17,7 +17,14 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { AnnotationToolbar } from "@/features/annotation/components/annotation-toolbar";
 import type { AnnotationKind } from "@/features/annotation/domain/annotation";
+import type { AnnotationRect } from "@/features/annotation/domain/annotation";
 import { useAnnotationStore } from "@/features/annotation/services/annotation-store";
+import {
+  createAnnotationOnServer,
+  deleteAnnotationOnServer,
+  fetchAnnotations,
+  updateAnnotationRectOnServer,
+} from "@/features/annotation/services/annotation-api";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
@@ -32,6 +39,19 @@ type FitMode = "width" | "page";
 
 interface PdfViewerProps {
   sourceUrl: string;
+}
+
+function deriveDocumentKey(sourceUrl: string): { documentKey: string; documentId: string | null } {
+  try {
+    const parsed = new URL(sourceUrl, "https://viewer.local");
+    const documentId = parsed.searchParams.get("docId");
+    parsed.searchParams.delete("docId");
+    const query = parsed.searchParams.toString();
+    const normalized = query ? `${parsed.pathname}?${query}` : parsed.pathname;
+    return { documentKey: normalized, documentId };
+  } catch {
+    return { documentKey: sourceUrl, documentId: null };
+  }
 }
 
 function buildWindow(center: number, total: number, radius: number): number[] {
@@ -64,6 +84,13 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const selectAnnotation = useAnnotationStore((state) => state.selectAnnotation);
   const createAnnotation = useAnnotationStore((state) => state.createAnnotation);
   const deleteAnnotation = useAnnotationStore((state) => state.deleteAnnotation);
+  const setDocumentAnnotations = useAnnotationStore(
+    (state) => state.setDocumentAnnotations,
+  );
+  const replaceAnnotation = useAnnotationStore((state) => state.replaceAnnotation);
+  const updateAnnotationRect = useAnnotationStore(
+    (state) => state.updateAnnotationRect,
+  );
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<Record<number, PDFPageProxy>>({});
@@ -76,6 +103,10 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
+  );
+  const { documentKey, documentId: persistedDocumentId } = useMemo(
+    () => deriveDocumentKey(sourceUrl),
+    [sourceUrl],
   );
 
   useEffect(() => {
@@ -127,6 +158,29 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       isCancelled = true;
     };
   }, [loader, sourceUrl]);
+
+  useEffect(() => {
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchAnnotations(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setDocumentAnnotations(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load saved annotations.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setDocumentAnnotations]);
 
   useEffect(() => {
     if (!pdfDocument) {
@@ -235,7 +289,6 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const canGoForward = totalPages > 0 && pageNumber < totalPages;
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
-  const documentKey = sourceUrl;
   const allCurrentDocumentAnnotations =
     annotationsByDocument[documentKey] ?? [];
   const canDeleteSelection = allCurrentDocumentAnnotations.some(
@@ -257,21 +310,57 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   function handleCreateAnnotation(
     targetPageNumber: number,
     kind: AnnotationKind,
-    rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
+    rect: AnnotationRect,
   ) {
-    createAnnotation({
+    const created = createAnnotation({
       documentKey,
       pageNumber: targetPageNumber,
       kind,
       rect,
     });
+
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    void createAnnotationOnServer(persistedDocumentId, created)
+      .then((saved) => {
+        replaceAnnotation(documentKey, created.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to persist annotation. Keeping local change.");
+      });
   }
 
   function handleDeleteSelection() {
     if (!selectedAnnotationId) {
       return;
     }
+    const target = allCurrentDocumentAnnotations.find(
+      (item) => item.id === selectedAnnotationId,
+    );
     deleteAnnotation(documentKey, selectedAnnotationId);
+
+    if (!target?.persisted) {
+      return;
+    }
+
+    void deleteAnnotationOnServer(selectedAnnotationId).catch(() => {
+      setError("Failed to delete annotation on server.");
+    });
+  }
+
+  function handleUpdateAnnotationRect(annotationId: string, rect: AnnotationRect) {
+    updateAnnotationRect(documentKey, annotationId, rect);
+
+    const target = allCurrentDocumentAnnotations.find((item) => item.id === annotationId);
+    if (!target?.persisted) {
+      return;
+    }
+
+    void updateAnnotationRectOnServer(annotationId, rect).catch(() => {
+      setError("Failed to sync annotation movement.");
+    });
   }
 
   return (
@@ -441,6 +530,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                   activeTool={activeTool}
                   onCreateAnnotation={handleCreateAnnotation}
                   onSelectAnnotation={selectAnnotation}
+                  onUpdateAnnotationRect={handleUpdateAnnotationRect}
                 />
               </div>
             ))}

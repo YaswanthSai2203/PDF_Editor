@@ -12,6 +12,8 @@ export interface AnnotationRect {
 export interface AnnotationEntity {
   id: string;
   documentKey: string;
+  persistedDocumentId?: string;
+  persisted?: boolean;
   pageNumber: number;
   kind: AnnotationKind;
   rect: AnnotationRect;

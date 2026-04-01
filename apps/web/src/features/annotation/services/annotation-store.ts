@@ -14,9 +14,18 @@ interface AnnotationState {
   activeTool: AnnotationTool;
   selectedAnnotationId: string | null;
   annotationsByDocument: Record<string, AnnotationEntity[]>;
+  setDocumentAnnotations: (
+    documentKey: string,
+    annotations: AnnotationEntity[],
+  ) => void;
   setActiveTool: (tool: AnnotationTool) => void;
   selectAnnotation: (annotationId: string | null) => void;
   createAnnotation: (input: CreateAnnotationInput) => AnnotationEntity;
+  replaceAnnotation: (
+    documentKey: string,
+    previousId: string,
+    next: AnnotationEntity,
+  ) => void;
   deleteAnnotation: (documentKey: string, annotationId: string) => void;
   updateAnnotationRect: (
     documentKey: string,
@@ -41,6 +50,16 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   selectedAnnotationId: null,
   annotationsByDocument: {},
 
+  setDocumentAnnotations: (documentKey, annotations) => {
+    set((state) => ({
+      annotationsByDocument: {
+        ...state.annotationsByDocument,
+        [documentKey]: annotations,
+      },
+      selectedAnnotationId: state.selectedAnnotationId,
+    }));
+  },
+
   setActiveTool: (tool) => {
     set({ activeTool: tool });
   },
@@ -58,6 +77,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     const created: AnnotationEntity = {
       id: annotationId,
       documentKey: input.documentKey,
+      persisted: false,
       pageNumber: input.pageNumber,
       kind: input.kind,
       rect: input.rect,
@@ -79,6 +99,25 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     });
 
     return created;
+  },
+
+  replaceAnnotation: (documentKey, previousId, nextAnnotation) => {
+    set((state) => {
+      const existing = state.annotationsByDocument[documentKey] ?? [];
+      const next = existing.map((item) =>
+        item.id === previousId ? nextAnnotation : item,
+      );
+      return {
+        selectedAnnotationId:
+          state.selectedAnnotationId === previousId
+            ? nextAnnotation.id
+            : state.selectedAnnotationId,
+        annotationsByDocument: {
+          ...state.annotationsByDocument,
+          [documentKey]: next,
+        },
+      };
+    });
   },
 
   deleteAnnotation: (documentKey, annotationId) => {

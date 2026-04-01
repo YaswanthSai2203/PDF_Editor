@@ -3,11 +3,10 @@
 import { useEffect, useRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
-import {
-  AnnotationOverlay,
-} from "@/features/annotation/components/annotation-overlay";
+import { AnnotationOverlay } from "@/features/annotation/components/annotation-overlay";
 import type { AnnotationEntity } from "@/features/annotation/domain/annotation";
 import type { AnnotationKind } from "@/features/annotation/domain/annotation";
+import type { AnnotationRect } from "@/features/annotation/domain/annotation";
 
 interface PdfCanvasPageProps {
   page: PDFPageProxy | null;
@@ -22,9 +21,10 @@ interface PdfCanvasPageProps {
   onCreateAnnotation?: (
     pageNumber: number,
     kind: AnnotationKind,
-    rect: { xPct: number; yPct: number; widthPct: number; heightPct: number },
+    rect: AnnotationRect,
   ) => void;
   onSelectAnnotation?: (annotationId: string | null) => void;
+  onUpdateAnnotationRect?: (annotationId: string, rect: AnnotationRect) => void;
 }
 
 export function PdfCanvasPage({
@@ -39,6 +39,7 @@ export function PdfCanvasPage({
   activeTool = "SELECT",
   onCreateAnnotation,
   onSelectAnnotation,
+  onUpdateAnnotationRect,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +117,7 @@ export function PdfCanvasPage({
             aria-hidden="true"
           />
         ) : null}
-        {onCreateAnnotation && onSelectAnnotation ? (
+        {onCreateAnnotation && onSelectAnnotation && onUpdateAnnotationRect ? (
           <AnnotationOverlay
             pageNumber={pageNumber}
             annotations={annotations}
@@ -124,6 +125,7 @@ export function PdfCanvasPage({
             activeTool={activeTool}
             onCreateAnnotation={onCreateAnnotation}
             onSelectAnnotation={onSelectAnnotation}
+            onUpdateAnnotationRect={onUpdateAnnotationRect}
           />
         ) : null}
       </div>
