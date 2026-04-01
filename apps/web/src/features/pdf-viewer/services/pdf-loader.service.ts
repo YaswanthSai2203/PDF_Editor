@@ -1,23 +1,19 @@
 "use client";
 
-import {
-  getDocument,
-  GlobalWorkerOptions,
-  type PDFDocumentLoadingTask,
-  type PDFDocumentProxy,
-} from "pdfjs-dist";
+import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { env } from "@/lib/env";
 
 let workerConfigured = false;
 
-function ensurePdfWorker(): void {
-  if (workerConfigured) {
-    return;
-  }
+async function loadPdfJs() {
+  return import("pdfjs-dist/legacy/build/pdf.mjs");
+}
 
-  GlobalWorkerOptions.workerSrc = env.NEXT_PUBLIC_PDF_WORKER_PATH;
-  workerConfigured = true;
+function ensureBrowserContext(): void {
+  if (typeof window === "undefined") {
+    throw new Error("PDF rendering can only run in the browser.");
+  }
 }
 
 export interface LoadPdfInput {
@@ -30,8 +26,14 @@ export interface PdfLoaderService {
 
 export class PdfJsLoaderService implements PdfLoaderService {
   async load(input: LoadPdfInput): Promise<PDFDocumentProxy> {
-    ensurePdfWorker();
-    const task: PDFDocumentLoadingTask = getDocument({
+    ensureBrowserContext();
+    const pdfjs = await loadPdfJs();
+    if (!workerConfigured) {
+      pdfjs.GlobalWorkerOptions.workerSrc = env.NEXT_PUBLIC_PDF_WORKER_PATH;
+      workerConfigured = true;
+    }
+
+    const task: PDFDocumentLoadingTask = pdfjs.getDocument({
       url: input.sourceUrl,
       withCredentials: false,
       disableAutoFetch: false,
