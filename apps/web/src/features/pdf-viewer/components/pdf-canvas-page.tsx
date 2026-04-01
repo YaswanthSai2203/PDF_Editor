@@ -14,6 +14,7 @@ interface PdfCanvasPageProps {
   page: PDFPageProxy | null;
   pageNumber: number;
   scale: number;
+  rotationDeg?: number;
   className?: string;
   onVisible?: () => void;
   showTextLayer?: boolean;
@@ -37,6 +38,7 @@ export function PdfCanvasPage({
   page,
   pageNumber,
   scale,
+  rotationDeg = 0,
   className,
   onVisible,
   showTextLayer = false,
@@ -79,7 +81,7 @@ export function PdfCanvasPage({
       return;
     }
 
-    const viewport = page.getViewport({ scale });
+    const viewport = page.getViewport({ scale, rotation: rotationDeg });
     const canvas = canvasRef.current;
     const context = canvas.getContext("2d");
 
@@ -110,7 +112,7 @@ export function PdfCanvasPage({
     return () => {
       renderTask.cancel();
     };
-  }, [page, scale]);
+  }, [page, scale, rotationDeg]);
 
   return (
     <div ref={containerRef} className={className}>

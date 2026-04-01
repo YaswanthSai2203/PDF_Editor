@@ -6,9 +6,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  GripVertical,
   Image as ImageIcon,
   Link2,
   LayoutTemplate,
+  RotateCcw,
+  RotateCw,
   Upload,
   Type,
   ZoomIn,
@@ -29,6 +32,17 @@ import {
   enqueueEditorTextSync,
   fetchEditorElements,
 } from "@/features/editor/services/editor-api";
+import { PageOrganizerPanel } from "@/features/page-organizer/components/page-organizer-panel";
+import type {
+  PageOperationEntity,
+  PageOperationType,
+} from "@/features/page-organizer/domain/page-organizer";
+import {
+  createPageOperationOnServer,
+  deletePageOperationOnServer,
+  fetchPageOperations,
+} from "@/features/page-organizer/services/page-organizer-api";
+import { usePageOrganizerStore } from "@/features/page-organizer/services/page-organizer-store";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
@@ -38,6 +52,7 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.1;
 const MAX_EAGER_PAGES = 30;
+const MAX_ORGANIZER_PAGES = 120;
 
 type FitMode = "width" | "page";
 
@@ -82,6 +97,65 @@ function hasPageLoaded(
   return Object.hasOwn(store, pageNumber);
 }
 
+function buildInitialOrder(totalPages: number): number[] {
+  return Array.from({ length: totalPages }, (_, index) => index + 1);
+}
+
+function applyOperations(totalPages: number, operations: PageOperationEntity[]): {
+  orderedPages: number[];
+  rotationByOriginalPage: Record<number, number>;
+} {
+  const orderedPages = buildInitialOrder(totalPages);
+  const rotationByOriginalPage: Record<number, number> = {};
+  for (let page = 1; page <= totalPages; page += 1) {
+    rotationByOriginalPage[page] = 0;
+  }
+
+  for (const operation of operations) {
+    if (operation.type === "REORDER") {
+      const payload = operation.payload;
+      if (
+        !("fromPage" in payload) ||
+        !("toPage" in payload) ||
+        typeof payload.fromPage !== "number" ||
+        typeof payload.toPage !== "number"
+      ) {
+        continue;
+      }
+      const fromIndex = orderedPages.findIndex(
+        (page) => page === payload.fromPage,
+      );
+      const toIndex = orderedPages.findIndex(
+        (page) => page === payload.toPage,
+      );
+      if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+        continue;
+      }
+      const [moved] = orderedPages.splice(fromIndex, 1);
+      orderedPages.splice(toIndex, 0, moved);
+      continue;
+    }
+
+    if (operation.type === "ROTATE") {
+      const payload = operation.payload;
+      if (
+        !("pageNumber" in payload) ||
+        !("deltaDegrees" in payload) ||
+        typeof payload.pageNumber !== "number" ||
+        typeof payload.deltaDegrees !== "number"
+      ) {
+        continue;
+      }
+      const page = payload.pageNumber;
+      const delta = payload.deltaDegrees;
+      const previous = rotationByOriginalPage[page] ?? 0;
+      rotationByOriginalPage[page] = ((previous + delta) % 360 + 360) % 360;
+    }
+  }
+
+  return { orderedPages, rotationByOriginalPage };
+}
+
 export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
   const [runtimeSourceUrl, setRuntimeSourceUrl] = useState<string>(sourceUrl);
@@ -102,6 +176,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [fitMode, setFitMode] = useState<FitMode>("width");
   const [showTextLayer, setShowTextLayer] = useState<boolean>(false);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
+  const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(false);
   const [thumbnailPages, setThumbnailPages] = useState<Record<number, PDFPageProxy>>(
     {},
   );
@@ -123,6 +198,20 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const editorRedo = useEditorStore((state) => state.redo);
   const editorCanUndo = useEditorStore((state) => state.canUndo(documentKey));
   const editorCanRedo = useEditorStore((state) => state.canRedo(documentKey));
+  const operationsByDocument = usePageOrganizerStore(
+    (state) => state.operationsByDocument,
+  );
+  const setDocumentOperations = usePageOrganizerStore(
+    (state) => state.setDocumentOperations,
+  );
+  const createOperation = usePageOrganizerStore((state) => state.createOperation);
+  const replaceOperation = usePageOrganizerStore((state) => state.replaceOperation);
+  const deleteOperation = usePageOrganizerStore((state) => state.deleteOperation);
+  const organizerUndo = usePageOrganizerStore((state) => state.undo);
+  const organizerRedo = usePageOrganizerStore((state) => state.redo);
+  const organizerCanUndo = usePageOrganizerStore((state) => state.canUndo(documentKey));
+  const organizerCanRedo = usePageOrganizerStore((state) => state.canRedo(documentKey));
+  const getOperationById = usePageOrganizerStore((state) => state.getOperationById);
 
   useEffect(() => {
     setRuntimeSourceUrl(sourceUrl);
@@ -209,12 +298,36 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   }, [documentKey, persistedDocumentId, setDocumentElements]);
 
   useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentOperations(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchPageOperations(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setDocumentOperations(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load saved page operations.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setDocumentOperations]);
+
+  useEffect(() => {
     if (!pdfDocument) {
       return;
     }
 
     let isCancelled = false;
-    const renderWindow = buildWindow(pageNumber, pdfDocument.numPages, 4);
+    const renderWindow = buildWindow(pageNumber, pdfDocument.numPages, 8);
     const missingPages = renderWindow.filter(
       (targetPage) => !hasPageLoaded(pages, targetPage),
     );
@@ -259,7 +372,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     }
 
     let isCancelled = false;
-    const thumbnailWindow = buildWindow(pageNumber, pdfDocument.numPages, 24).slice(
+    const thumbnailWindow = buildWindow(pageNumber, pdfDocument.numPages, 32).slice(
       0,
       MAX_EAGER_PAGES,
     );
@@ -302,12 +415,20 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   }, [pageNumber, pdfDocument, thumbnailPages]);
 
   const totalPages = pdfDocument?.numPages ?? 0;
+  const allCurrentDocumentOperations = useMemo(
+    () => operationsByDocument[documentKey] ?? [],
+    [documentKey, operationsByDocument],
+  );
+  const { orderedPages, rotationByOriginalPage } = useMemo(
+    () => applyOperations(totalPages, allCurrentDocumentOperations),
+    [allCurrentDocumentOperations, totalPages],
+  );
   const renderWindow = useMemo(
-    () => buildWindow(pageNumber, totalPages, 4),
+    () => buildWindow(pageNumber, totalPages, 8),
     [pageNumber, totalPages],
   );
   const thumbnailWindow = useMemo(
-    () => buildWindow(pageNumber, totalPages, 24).slice(0, MAX_EAGER_PAGES),
+    () => buildWindow(pageNumber, totalPages, 32).slice(0, MAX_EAGER_PAGES),
     [pageNumber, totalPages],
   );
 
@@ -320,6 +441,18 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     (item) => item.id === editorSelectedElementId,
   );
 
+  function getDisplayIndexForOriginalPage(originalPage: number): number {
+    const displayIndex = orderedPages.findIndex((item) => item === originalPage);
+    return displayIndex >= 0 ? displayIndex + 1 : originalPage;
+  }
+
+  function getOriginalPageForDisplayIndex(displayIndex: number): number {
+    if (displayIndex < 1 || displayIndex > orderedPages.length) {
+      return orderedPages[0] ?? 1;
+    }
+    return orderedPages[displayIndex - 1];
+  }
+
   function scrollToPage(targetPageNumber: number) {
     const boundedPageNumber = Math.max(1, Math.min(targetPageNumber, totalPages || 1));
     setPageNumber(boundedPageNumber);
@@ -329,6 +462,66 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
         `pdf-page-${boundedPageNumber}`,
       );
       pageElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function createPageOperation(
+    type: PageOperationType,
+    payload:
+      | {
+          fromPage: number;
+          toPage: number;
+        }
+      | {
+          pageNumber: number;
+          deltaDegrees: -90 | 90 | 180;
+        },
+  ) {
+    const created = createOperation({
+      documentKey,
+      type,
+      payload,
+    });
+
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    void createPageOperationOnServer(persistedDocumentId, created)
+      .then((saved) => {
+        replaceOperation(documentKey, created.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to persist page operation. Keeping local change.");
+      });
+  }
+
+  function handleDeleteOperation(operationId: string) {
+    const target = getOperationById(documentKey, operationId);
+    deleteOperation(documentKey, operationId);
+    if (!target?.persisted) {
+      return;
+    }
+    void deletePageOperationOnServer(operationId).catch(() => {
+      setError("Failed to delete page operation on server.");
+    });
+  }
+
+  function handleMovePage(fromOriginalPage: number, toOriginalPage: number) {
+    if (fromOriginalPage === toOriginalPage) {
+      return;
+    }
+    createPageOperation("REORDER", {
+      fromPage: fromOriginalPage,
+      toPage: toOriginalPage,
+    });
+    setPageNumber(toOriginalPage);
+  }
+
+  function handleRotatePage(page: number, delta: -90 | 90 | 180) {
+    createPageOperation("ROTATE", {
+      pageNumber: page,
+      deltaDegrees: delta,
     });
   }
 
@@ -573,9 +766,40 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </>
           ) : (
             <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              Annotation mode is planned next on this branch.
+              Annotation tools are available in the annotate engine.
             </span>
           )}
+
+          <div className="inline-flex items-center gap-1 rounded-md border border-zinc-300 p-1 dark:border-zinc-700">
+            <Button
+              size="sm"
+              variant={showOrganizerPanel ? "secondary" : "ghost"}
+              onClick={() => setShowOrganizerPanel((current) => !current)}
+            >
+              <GripVertical className="mr-1 h-4 w-4" />
+              Organize
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => handleRotatePage(pageNumber, -90)}
+              aria-label="Rotate current page left"
+              title="Rotate left"
+              disabled={!totalPages}
+            >
+              <RotateCcw className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => handleRotatePage(pageNumber, 90)}
+              aria-label="Rotate current page right"
+              title="Rotate right"
+              disabled={!totalPages}
+            >
+              <RotateCw className="h-4 w-4" />
+            </Button>
+          </div>
 
           <Button
             size="icon"
@@ -639,7 +863,14 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
         </div>
       </div>
 
-      <div className="grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70 md:grid-cols-[220px_1fr]">
+      <div
+        className={cn(
+          "grid h-full min-h-0 grid-cols-1 bg-zinc-100 dark:bg-zinc-950/70",
+          showOrganizerPanel
+            ? "md:grid-cols-[220px_1fr_320px]"
+            : "md:grid-cols-[220px_1fr]",
+        )}
+      >
         <aside
           className={cn(
             "min-h-0 overflow-y-auto border-r border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900",
@@ -647,15 +878,19 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
           )}
         >
           <div className="space-y-2">
-            {thumbnailWindow.map((pageIndex) => (
+            {thumbnailWindow.map((pageIndex) => {
+              const originalPage = getOriginalPageForDisplayIndex(pageIndex);
+              return (
               <PdfThumbnail
-                key={`thumb-${pageIndex}`}
-                page={thumbnailPages[pageIndex] ?? null}
+                key={`thumb-${originalPage}`}
+                page={thumbnailPages[originalPage] ?? null}
                 pageNumber={pageIndex}
-                isActive={pageNumber === pageIndex}
-                onClick={() => scrollToPage(pageIndex)}
+                isActive={pageNumber === originalPage}
+                rotationDeg={rotationByOriginalPage[originalPage] ?? 0}
+                onClick={() => scrollToPage(originalPage)}
               />
-            ))}
+              );
+            })}
             {totalPages > thumbnailWindow.length ? (
               <p className="px-2 py-1 text-xs text-zinc-500 dark:text-zinc-400">
                 Virtualized thumbnails window around page {pageNumber} / {totalPages}.
@@ -666,19 +901,22 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
 
         <div className="min-h-0 overflow-auto p-4 md:p-6">
           <div className="mx-auto flex w-fit flex-col gap-4">
-            {renderWindow.map((renderPageNumber) => (
+            {renderWindow.map((renderDisplayIndex) => {
+              const renderPageNumber = getOriginalPageForDisplayIndex(renderDisplayIndex);
+              return (
               <div
                 key={`page-${renderPageNumber}`}
                 id={`pdf-page-${renderPageNumber}`}
                 className="scroll-mt-24"
               >
                 <div className="mb-1 text-center text-xs text-zinc-500 dark:text-zinc-400">
-                  Page {renderPageNumber}
+                  Page {getDisplayIndexForOriginalPage(renderPageNumber)}
                 </div>
                 <PdfCanvasPage
                   page={pages[renderPageNumber] ?? null}
                   pageNumber={renderPageNumber}
                   scale={fitMode === "page" ? Math.min(scale, 1.2) : scale}
+                  rotationDeg={rotationByOriginalPage[renderPageNumber] ?? 0}
                   onVisible={() => setPageNumber(renderPageNumber)}
                   showTextLayer={showTextLayer}
                   interactionMode={interactionMode}
@@ -694,9 +932,29 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                   onUpdateEditorElementValue={handleUpdateEditorElementValue}
                 />
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
+        {showOrganizerPanel ? (
+          <aside className="min-h-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <PageOrganizerPanel
+              totalPages={Math.min(totalPages, MAX_ORGANIZER_PAGES)}
+              orderedPages={orderedPages.slice(0, MAX_ORGANIZER_PAGES)}
+              activePage={pageNumber}
+              rotationByOriginalPage={rotationByOriginalPage}
+              canUndo={organizerCanUndo}
+              canRedo={organizerCanRedo}
+              onSelectPage={(originalPage) => scrollToPage(originalPage)}
+              onMovePage={handleMovePage}
+              onRotatePage={handleRotatePage}
+              onUndo={() => organizerUndo(documentKey)}
+              onRedo={() => organizerRedo(documentKey)}
+              operations={allCurrentDocumentOperations}
+              onDeleteOperation={handleDeleteOperation}
+            />
+          </aside>
+        ) : null}
 
         {isInitialLoading ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-100/70 dark:bg-zinc-950/70">

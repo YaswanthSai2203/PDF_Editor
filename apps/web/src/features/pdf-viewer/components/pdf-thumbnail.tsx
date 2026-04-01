@@ -10,6 +10,7 @@ interface PdfThumbnailProps {
   pageNumber: number;
   isActive: boolean;
   onClick: () => void;
+  rotationDeg?: number;
 }
 
 export function PdfThumbnail({
@@ -17,6 +18,7 @@ export function PdfThumbnail({
   pageNumber,
   isActive,
   onClick,
+  rotationDeg = 0,
 }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -59,6 +61,11 @@ export function PdfThumbnail({
     >
       <canvas ref={canvasRef} className="rounded border border-zinc-200 dark:border-zinc-700" />
       <span className="text-xs text-zinc-600 dark:text-zinc-300">{pageNumber}</span>
+      {rotationDeg !== 0 ? (
+        <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+          {rotationDeg}°
+        </span>
+      ) : null}
     </button>
   );
 }
