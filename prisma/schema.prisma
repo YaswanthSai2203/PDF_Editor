@@ -1,0 +1,465 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum TeamInvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum DocumentStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum DocumentSource {
+  UPLOAD
+  IMPORT
+  GENERATED
+}
+
+enum StorageProvider {
+  S3
+  R2
+  GCS
+  AZURE_BLOB
+  LOCAL
+}
+
+enum VersionTrigger {
+  MANUAL_SAVE
+  AUTOSAVE
+  OCR_COMPLETED
+  MERGE
+  RESTORE
+}
+
+enum CommentStatus {
+  OPEN
+  RESOLVED
+}
+
+enum SignatureRequestStatus {
+  DRAFT
+  SENT
+  PARTIALLY_SIGNED
+  COMPLETED
+  DECLINED
+  EXPIRED
+}
+
+enum SignatureParticipantRole {
+  SIGNER
+  APPROVER
+  CC
+}
+
+enum SignatureParticipantStatus {
+  PENDING
+  VIEWED
+  SIGNED
+  DECLINED
+  EXPIRED
+}
+
+enum OcrJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum CollaborationEventType {
+  DOCUMENT_OPENED
+  ANNOTATION_CREATED
+  VERSION_CREATED
+  SIGNATURE_SENT
+  COMMENT_ADDED
+}
+
+enum AiConversationScope {
+  DOCUMENT
+  WORKSPACE
+  TEAM
+}
+
+model User {
+  id                       String                    @id @default(cuid())
+  email                    String                    @unique
+  name                     String?
+  imageUrl                 String?
+  locale                   String                    @default("en-US")
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  ownedWorkspaces          Workspace[]               @relation("WorkspaceOwner")
+  memberships              WorkspaceMembership[]
+  uploadedDocuments        Document[]                @relation("DocumentCreator")
+  createdAnnotations       Annotation[]              @relation("AnnotationCreator")
+  createdComments          Comment[]                 @relation("CommentAuthor")
+  createdVersions          DocumentVersion[]         @relation("VersionAuthor")
+  signatureAssets          SignatureAsset[]
+  initiatedSignatureFlows  SignatureRequest[]        @relation("SignatureRequestCreator")
+  signatureParticipants    SignatureParticipant[]
+  aiConversations          AiConversation[]
+  aiMessages               AiMessage[]
+}
+
+model Workspace {
+  id                String                 @id @default(cuid())
+  name              String
+  slug              String                 @unique
+  ownerId           String
+  plan              SubscriptionPlan       @default(FREE)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  owner             User                   @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  memberships       WorkspaceMembership[]
+  invitations       WorkspaceInvitation[]
+  documents         Document[]
+  billingAccount    BillingAccount?
+  collaborationFeed CollaborationEvent[]
+  aiConversations   AiConversation[]
+}
+
+model WorkspaceMembership {
+  id          String         @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        MembershipRole
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model WorkspaceInvitation {
+  id           String               @id @default(cuid())
+  workspaceId  String
+  email        String
+  role         MembershipRole
+  token        String               @unique
+  status       TeamInvitationStatus @default(PENDING)
+  invitedById  String?
+  expiresAt    DateTime
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, email])
+}
+
+model BillingAccount {
+  id                      String             @id @default(cuid())
+  workspaceId             String             @unique
+  providerCustomerId      String?            @unique
+  providerSubscriptionId  String?            @unique
+  plan                    SubscriptionPlan   @default(FREE)
+  status                  SubscriptionStatus @default(TRIALING)
+  seats                   Int                @default(1)
+  trialEndsAt             DateTime?
+  currentPeriodEndsAt     DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  workspace               Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  createdById         String
+  title               String
+  description         String?
+  source              DocumentSource
+  status              DocumentStatus     @default(DRAFT)
+  currentVersionId    String?            @unique
+  pageCount           Int                @default(0)
+  fileSizeBytes       BigInt?
+  checksumSha256      String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  workspace           Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy           User               @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions            DocumentVersion[]
+  currentVersion      DocumentVersion?   @relation("DocumentCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  pages               DocumentPage[]
+  annotations         Annotation[]
+  comments            Comment[]
+  formFields          FormField[]
+  signatureRequests   SignatureRequest[]
+  ocrJobs             OcrJob[]
+  versionSnapshots    VersionSnapshot[]
+  collaborationEvents CollaborationEvent[]
+  aiConversations     AiConversation[]
+
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model DocumentVersion {
+  id                String           @id @default(cuid())
+  documentId        String
+  createdById       String?
+  versionNumber     Int
+  trigger           VersionTrigger
+  label             String?
+  storageObjectId   String
+  deltaObjectId     String?
+  checksumSha256    String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  document          Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy         User?            @relation("VersionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  storageObject     StorageObject    @relation("VersionStorageObject", fields: [storageObjectId], references: [id], onDelete: Restrict)
+  deltaObject       StorageObject?   @relation("VersionDeltaObject", fields: [deltaObjectId], references: [id], onDelete: SetNull)
+  currentFor        Document?        @relation("DocumentCurrentVersion")
+  snapshots         VersionSnapshot[]
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId, createdAt])
+}
+
+model VersionSnapshot {
+  id                String         @id @default(cuid())
+  documentId        String
+  versionId         String
+  snapshotJson      Json
+  createdAt         DateTime       @default(now())
+  document          Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version           DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, versionId])
+}
+
+model DocumentPage {
+  id                String         @id @default(cuid())
+  documentId        String
+  pageNumber        Int
+  width             Float?
+  height            Float?
+  rotation          Int            @default(0)
+  textLayerJson     Json?
+  thumbnailObjectId String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  document          Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  thumbnailObject   StorageObject? @relation("PageThumbnailObject", fields: [thumbnailObjectId], references: [id], onDelete: SetNull)
+  annotations       Annotation[]
+  formFields        FormField[]
+
+  @@unique([documentId, pageNumber])
+}
+
+model Annotation {
+  id                 String       @id @default(cuid())
+  documentId         String
+  pageId             String
+  createdById        String?
+  type               String
+  tool               String
+  payload            Json
+  appearanceJson     Json?
+  zIndex             Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  document           Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  page               DocumentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  createdBy          User?        @relation("AnnotationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([documentId, pageId])
+}
+
+model Comment {
+  id           String        @id @default(cuid())
+  documentId   String
+  authorId     String?
+  annotationId String?
+  body         String
+  status       CommentStatus @default(OPEN)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  document     Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author       User?         @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, status])
+}
+
+model FormField {
+  id             String       @id @default(cuid())
+  documentId     String
+  pageId         String
+  fieldName      String
+  fieldType      String
+  defaultValue   String?
+  validationJson Json?
+  rectJson       Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  document       Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  page           DocumentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, fieldName])
+}
+
+model SignatureAsset {
+  id              String        @id @default(cuid())
+  userId          String
+  storageObjectId String
+  label           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storageObject   StorageObject @relation("SignatureAssetStorageObject", fields: [storageObjectId], references: [id], onDelete: Restrict)
+}
+
+model SignatureRequest {
+  id              String                    @id @default(cuid())
+  documentId      String
+  createdById     String
+  title           String
+  message         String?
+  status          SignatureRequestStatus    @default(DRAFT)
+  expiresAt       DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  document        Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy       User                      @relation("SignatureRequestCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  participants    SignatureParticipant[]
+
+  @@index([documentId, status])
+}
+
+model SignatureParticipant {
+  id                 String                     @id @default(cuid())
+  signatureRequestId String
+  userId             String?
+  email              String
+  role               SignatureParticipantRole
+  routingOrder       Int
+  status             SignatureParticipantStatus @default(PENDING)
+  signedAt           DateTime?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+  signatureRequest   SignatureRequest           @relation(fields: [signatureRequestId], references: [id], onDelete: Cascade)
+  user               User?                      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([signatureRequestId, email])
+  @@index([signatureRequestId, routingOrder])
+}
+
+model OcrJob {
+  id                String       @id @default(cuid())
+  documentId        String
+  requestedById     String?
+  storageObjectId   String?
+  provider          String
+  languageHints     String[]
+  status            OcrJobStatus @default(QUEUED)
+  pageRangeStart    Int?
+  pageRangeEnd      Int?
+  resultJson        Json?
+  errorMessage      String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  document          Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, status])
+}
+
+model StorageObject {
+  id                String          @id @default(cuid())
+  provider          StorageProvider
+  bucket            String
+  objectKey         String
+  mimeType          String
+  sizeBytes         BigInt?
+  checksumSha256    String?
+  encryptionKeyRef  String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  versionFor        DocumentVersion[] @relation("VersionStorageObject")
+  versionDeltaFor   DocumentVersion[] @relation("VersionDeltaObject")
+  pageThumbnails    DocumentPage[]  @relation("PageThumbnailObject")
+  signatureAssets   SignatureAsset[] @relation("SignatureAssetStorageObject")
+
+  @@unique([provider, bucket, objectKey])
+}
+
+model CollaborationEvent {
+  id           String                 @id @default(cuid())
+  workspaceId  String
+  documentId   String?
+  actorId      String?
+  type         CollaborationEventType
+  payload      Json
+  createdAt    DateTime               @default(now())
+  workspace    Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  document     Document?              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([documentId, createdAt])
+}
+
+model AiConversation {
+  id           String              @id @default(cuid())
+  workspaceId  String
+  documentId   String?
+  userId       String?
+  scope        AiConversationScope
+  title        String
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  document     Document?           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user         User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages     AiMessage[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([documentId, updatedAt])
+}
+
+model AiMessage {
+  id               String         @id @default(cuid())
+  conversationId   String
+  userId           String?
+  role             String
+  content          String
+  metadataJson     Json?
+  createdAt        DateTime       @default(now())
+  conversation     AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user             User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
