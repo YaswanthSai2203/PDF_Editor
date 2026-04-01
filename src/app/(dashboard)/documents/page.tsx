@@ -2,7 +2,6 @@ import { Metadata } from "next";
 import Link from "next/link";
 import {
   FileText,
-  Upload,
   Grid3x3,
   List,
   Filter,
@@ -24,12 +23,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { UploadZone } from "@/components/shared/upload-zone";
 import { formatBytes, formatRelativeTime } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Documents",
 };
 
+// TODO: replace with real fetch from /api/documents
 const mockDocuments = [
   { id: "doc_1", title: "Q1 2026 Financial Report.pdf", fileSize: 2_450_000, pageCount: 24, updatedAt: new Date(Date.now() - 1000 * 60 * 30), status: "READY" },
   { id: "doc_2", title: "Service Agreement — Acme Corp.pdf", fileSize: 890_000, pageCount: 8, updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 3), status: "READY" },
@@ -50,11 +51,10 @@ export default function DocumentsPage() {
             {mockDocuments.length} documents · 1.4 GB used of 10 GB
           </p>
         </div>
-        <Button size="sm">
-          <Upload className="h-3.5 w-3.5" />
-          Upload PDF
-        </Button>
       </div>
+
+      {/* Upload zone */}
+      <UploadZone redirectToEditor className="max-w-xl" />
 
       {/* Filters row */}
       <div className="flex items-center gap-2 flex-wrap">

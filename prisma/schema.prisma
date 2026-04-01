@@ -26,17 +26,18 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  memberships   TeamMember[]
-  documents     Document[]
-  annotations   Annotation[]
-  signatures    SignatureRequest[] @relation("Requester")
-  signatureSlots SignatureSlot[]
-  subscription  Subscription?
-  auditLogs     AuditLog[]
-  apiKeys       ApiKey[]
-  formSubmissions FormSubmission[]
+  accounts           Account[]
+  sessions           Session[]
+  memberships        TeamMember[]
+  documents          Document[]
+  annotations        Annotation[]
+  annotationReplies  AnnotationReply[]
+  signatures         SignatureRequest[] @relation("Requester")
+  signatureSlots     SignatureSlot[]
+  subscription       Subscription?
+  auditLogs          AuditLog[]
+  apiKeys            ApiKey[]
+  formSubmissions    FormSubmission[]
 
   @@index([email])
 }
@@ -294,8 +295,10 @@ model AnnotationReply {
   updatedAt    DateTime @updatedAt
 
   annotation Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
 
   @@index([annotationId])
+  @@index([userId])
 }
 
 // =============================================================================

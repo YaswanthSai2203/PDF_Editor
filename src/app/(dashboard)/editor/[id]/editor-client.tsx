@@ -22,7 +22,7 @@ import { PDFViewer } from "@/components/pdf/pdf-viewer";
 import { PanelThumbnails } from "@/components/sidebar/panel-thumbnails";
 import { PanelAnnotations } from "@/components/sidebar/panel-annotations";
 import { useDocumentStore } from "@/stores/document.store";
-import { useUIStore } from "@/stores/ui.store";
+import { useAnnotations } from "@/hooks/use-annotations";
 import { cn } from "@/lib/utils";
 
 interface EditorClientProps {
@@ -53,6 +53,9 @@ export function EditorClient({ document }: EditorClientProps) {
   const [activePanel, setActivePanel] = useState<EditorPanel>("thumbnails");
   const { actions: docActions } = useDocumentStore();
 
+  // Auto-save annotations to DB
+  const { saveNow, isSaving } = useAnnotations(document.id);
+
   const handleDocumentLoaded = useCallback(
     (doc: PDFDocumentProxy) => {
       setLoadedDoc(doc);
@@ -70,7 +73,7 @@ export function EditorClient({ document }: EditorClientProps) {
     <TooltipProvider delayDuration={400}>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Top toolbar */}
-        <EditorToolbar documentTitle={document.title} />
+        <EditorToolbar documentTitle={document.title} isSaving={isSaving} onSave={saveNow} />
 
         <div className="flex flex-1 overflow-hidden">
           {/* Left icon rail */}

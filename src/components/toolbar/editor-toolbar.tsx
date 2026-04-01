@@ -126,11 +126,13 @@ const utilityTools: typeof annotationTools = [
 interface EditorToolbarProps {
   documentTitle?: string;
   isSaving?: boolean;
+  onSave?: () => void;
 }
 
 export function EditorToolbar({
   documentTitle,
   isSaving,
+  onSave,
 }: EditorToolbarProps) {
   const { activeTool, toolSettings, actions: annotationActions } =
     useAnnotationStore();
@@ -416,6 +418,7 @@ export function EditorToolbar({
                 size="sm"
                 className="h-8 gap-1.5"
                 disabled={isSaving}
+                onClick={onSave}
               >
                 <Save className="h-3.5 w-3.5" />
                 {isSaving ? "Saving..." : "Save"}
