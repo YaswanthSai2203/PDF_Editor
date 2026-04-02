@@ -27,6 +27,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { AnnotationToolbar } from "@/features/annotation/components/annotation-toolbar";
+import type { AnnotationKind } from "@/features/annotation/domain/annotation";
+import {
+  createAnnotationOnServer,
+  deleteAnnotationOnServer,
+  enqueueAnnotationNoteTextSync,
+  enqueueAnnotationRectSync,
+  fetchAnnotations,
+} from "@/features/annotation/services/annotation-api";
+import { useAnnotationStore } from "@/features/annotation/services/annotation-store";
 import { EditorToolbar } from "@/features/editor/components/editor-toolbar";
 import type { EditorElementKind } from "@/features/editor/domain/editor-element";
 import type { EditorElementRect } from "@/features/editor/domain/editor-element";
@@ -120,11 +130,15 @@ const MAX_ORGANIZER_PAGES = 120;
 
 type FitMode = "width" | "page";
 
+type InteractionMode = "annotate" | "edit";
+
+type WorkspaceSidePanel = "organize" | "signature" | "forms";
+
 interface PdfViewerProps {
   sourceUrl: string;
+  initialMode?: InteractionMode;
+  initialPanel?: WorkspaceSidePanel;
 }
-
-type InteractionMode = "annotate" | "edit";
 
 function toViewerSource(url: string): string {
   const trimmed = url.trim();
@@ -220,7 +234,11 @@ function applyOperations(totalPages: number, operations: PageOperationEntity[]):
   return { orderedPages, rotationByOriginalPage };
 }
 
-export function PdfViewer({ sourceUrl }: PdfViewerProps) {
+export function PdfViewer({
+  sourceUrl,
+  initialMode = "edit",
+  initialPanel,
+}: PdfViewerProps) {
   const loader = useMemo(() => new PdfJsLoaderService(), []);
   const [runtimeSourceUrl, setRuntimeSourceUrl] = useState<string>(sourceUrl);
   const [sourceInputValue, setSourceInputValue] = useState<string>(sourceUrl);
@@ -228,7 +246,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     () => deriveDocumentKey(runtimeSourceUrl),
     [runtimeSourceUrl],
   );
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>("edit");
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>(initialMode);
   const [imageDraftUrl, setImageDraftUrl] = useState<string>("");
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
@@ -240,9 +258,13 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const [fitMode, setFitMode] = useState<FitMode>("width");
   const [showTextLayer, setShowTextLayer] = useState<boolean>(false);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
-  const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(false);
-  const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(false);
-  const [showFormsPanel, setShowFormsPanel] = useState<boolean>(false);
+  const [showOrganizerPanel, setShowOrganizerPanel] = useState<boolean>(
+    initialPanel === "organize",
+  );
+  const [showSignaturePanel, setShowSignaturePanel] = useState<boolean>(
+    initialPanel === "signature",
+  );
+  const [showFormsPanel, setShowFormsPanel] = useState<boolean>(initialPanel === "forms");
   const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
   const [showCollaborationPanel, setShowCollaborationPanel] = useState<boolean>(false);
   const [showAiPanel, setShowAiPanel] = useState<boolean>(false);
@@ -268,6 +290,30 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
   const editorRedo = useEditorStore((state) => state.redo);
   const editorCanUndo = useEditorStore((state) => state.canUndo(documentKey));
   const editorCanRedo = useEditorStore((state) => state.canRedo(documentKey));
+  const annotationsByDocument = useAnnotationStore(
+    (state) => state.annotationsByDocument,
+  );
+  const annotationSelectedId = useAnnotationStore(
+    (state) => state.selectedAnnotationId,
+  );
+  const annotationActiveTool = useAnnotationStore((state) => state.activeTool);
+  const setAnnotationActiveTool = useAnnotationStore((state) => state.setActiveTool);
+  const selectAnnotation = useAnnotationStore((state) => state.selectAnnotation);
+  const setDocumentAnnotations = useAnnotationStore(
+    (state) => state.setDocumentAnnotations,
+  );
+  const createAnnotation = useAnnotationStore((state) => state.createAnnotation);
+  const replaceAnnotation = useAnnotationStore((state) => state.replaceAnnotation);
+  const deleteAnnotation = useAnnotationStore((state) => state.deleteAnnotation);
+  const updateAnnotationRect = useAnnotationStore((state) => state.updateAnnotationRect);
+  const updateAnnotationNoteText = useAnnotationStore(
+    (state) => state.updateAnnotationNoteText,
+  );
+  const annotationUndo = useAnnotationStore((state) => state.undo);
+  const annotationRedo = useAnnotationStore((state) => state.redo);
+  const annotationCanUndo = useAnnotationStore((state) => state.canUndo(documentKey));
+  const annotationCanRedo = useAnnotationStore((state) => state.canRedo(documentKey));
+  const getAnnotationById = useAnnotationStore((state) => state.getAnnotationById);
   const operationsByDocument = usePageOrganizerStore(
     (state) => state.operationsByDocument,
   );
@@ -421,6 +467,30 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
       isCancelled = true;
     };
   }, [documentKey, persistedDocumentId, setDocumentElements]);
+
+  useEffect(() => {
+    if (!persistedDocumentId) {
+      setDocumentAnnotations(documentKey, []);
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchAnnotations(persistedDocumentId, documentKey)
+      .then((loaded) => {
+        if (!isCancelled) {
+          setDocumentAnnotations(documentKey, loaded);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setError("Unable to load saved annotations.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [documentKey, persistedDocumentId, setDocumentAnnotations]);
 
   useEffect(() => {
     if (!persistedDocumentId) {
@@ -781,6 +851,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
   const allCurrentDocumentEditorElements = editorElementsByDocument[documentKey] ?? [];
+  const allCurrentDocumentAnnotations = annotationsByDocument[documentKey] ?? [];
   const allCurrentDocumentSignatureRequests =
     signatureRequestsByDocument[documentKey] ?? [];
   const allCurrentDocumentFormFields = formFieldsByDocument[documentKey] ?? [];
@@ -803,6 +874,9 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     "";
   const canDeleteEditorSelection = allCurrentDocumentEditorElements.some(
     (item) => item.id === editorSelectedElementId,
+  );
+  const canDeleteAnnotationSelection = allCurrentDocumentAnnotations.some(
+    (item) => item.id === annotationSelectedId,
   );
 
   function getDisplayIndexForOriginalPage(originalPage: number): number {
@@ -1361,9 +1435,11 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
           totalPages,
           currentPage: pageNumber,
           mode: interactionMode,
-          selectedTool: editorActiveTool,
+          selectedTool:
+            interactionMode === "annotate" ? annotationActiveTool : editorActiveTool,
           counts: {
             editorElements: allCurrentDocumentEditorElements.length,
+            annotations: allCurrentDocumentAnnotations.length,
             formFields: allCurrentDocumentFormFields.length,
             comments: allCurrentDocumentComments.length,
             versions: allCurrentDocumentVersions.length,
@@ -1497,6 +1573,65 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
     });
   }
 
+  function handleCreateAnnotation(
+    targetPageNumber: number,
+    kind: AnnotationKind,
+    rect: EditorElementRect,
+  ) {
+    const created = createAnnotation({
+      documentKey,
+      pageNumber: targetPageNumber,
+      kind,
+      rect,
+    });
+
+    if (!persistedDocumentId) {
+      return;
+    }
+
+    void createAnnotationOnServer(persistedDocumentId, created)
+      .then((saved) => {
+        replaceAnnotation(documentKey, created.id, saved);
+      })
+      .catch(() => {
+        setError("Failed to persist annotation. Keeping local change.");
+      });
+  }
+
+  function handleUpdateAnnotationRect(annotationId: string, rect: EditorElementRect) {
+    updateAnnotationRect(documentKey, annotationId, rect);
+    const target = getAnnotationById(documentKey, annotationId);
+    if (!target?.persisted) {
+      return;
+    }
+    enqueueAnnotationRectSync(annotationId, rect, target.syncVersion ?? 0);
+  }
+
+  function handleUpdateAnnotationNoteText(annotationId: string, noteText: string) {
+    updateAnnotationNoteText(documentKey, annotationId, noteText);
+    const target = getAnnotationById(documentKey, annotationId);
+    if (!target?.persisted) {
+      return;
+    }
+    enqueueAnnotationNoteTextSync(annotationId, noteText, target.syncVersion ?? 0);
+  }
+
+  function handleDeleteAnnotationSelection() {
+    if (!annotationSelectedId) {
+      return;
+    }
+    const target = allCurrentDocumentAnnotations.find(
+      (item) => item.id === annotationSelectedId,
+    );
+    deleteAnnotation(documentKey, annotationSelectedId);
+    if (!target?.persisted) {
+      return;
+    }
+    void deleteAnnotationOnServer(annotationSelectedId).catch(() => {
+      setError("Failed to delete annotation on server.");
+    });
+  }
+
   return (
     <section className="flex h-full min-h-[70vh] flex-col overflow-hidden">
       <div className="border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
@@ -1621,15 +1756,22 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
               </label>
             </>
           ) : (
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              Annotation tools are available in the annotate engine.
-            </span>
+            <AnnotationToolbar
+              activeTool={annotationActiveTool}
+              onToolChange={setAnnotationActiveTool}
+              canDeleteSelection={canDeleteAnnotationSelection}
+              onDeleteSelection={handleDeleteAnnotationSelection}
+              canUndo={annotationCanUndo}
+              canRedo={annotationCanRedo}
+              onUndo={() => annotationUndo(documentKey)}
+              onRedo={() => annotationRedo(documentKey)}
+            />
           )}
 
-          <div className="inline-flex items-center gap-1 rounded-md border border-zinc-300 p-1 dark:border-zinc-700">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-md border border-zinc-300 p-1 dark:border-zinc-700">
             <Button
               size="sm"
-              variant={showOrganizerPanel ? "secondary" : "ghost"}
+              variant={showOrganizerPanel ? "secondary" : "outline"}
               onClick={() => setShowOrganizerPanel((current) => !current)}
             >
               <GripVertical className="mr-1 h-4 w-4" />
@@ -1637,7 +1779,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="icon"
-              variant="ghost"
+              variant="outline"
               onClick={() => handleRotatePage(pageNumber, -90)}
               aria-label="Rotate current page left"
               title="Rotate left"
@@ -1647,7 +1789,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="icon"
-              variant="ghost"
+              variant="outline"
               onClick={() => handleRotatePage(pageNumber, 90)}
               aria-label="Rotate current page right"
               title="Rotate right"
@@ -1657,7 +1799,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showSignaturePanel ? "secondary" : "ghost"}
+              variant={showSignaturePanel ? "secondary" : "outline"}
               onClick={() => setShowSignaturePanel((current) => !current)}
             >
               <Signature className="mr-1 h-4 w-4" />
@@ -1665,7 +1807,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showFormsPanel ? "secondary" : "ghost"}
+              variant={showFormsPanel ? "secondary" : "outline"}
               onClick={() => setShowFormsPanel((current) => !current)}
             >
               <FileSignature className="mr-1 h-4 w-4" />
@@ -1673,7 +1815,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showOcrPanel ? "secondary" : "ghost"}
+              variant={showOcrPanel ? "secondary" : "outline"}
               onClick={() => setShowOcrPanel((current) => !current)}
             >
               <ScanText className="mr-1 h-4 w-4" />
@@ -1681,7 +1823,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showCollaborationPanel ? "secondary" : "ghost"}
+              variant={showCollaborationPanel ? "secondary" : "outline"}
               onClick={() => setShowCollaborationPanel((current) => !current)}
             >
               <MessagesSquare className="mr-1 h-4 w-4" />
@@ -1689,7 +1831,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showAiPanel ? "secondary" : "ghost"}
+              variant={showAiPanel ? "secondary" : "outline"}
               onClick={() => setShowAiPanel((current) => !current)}
             >
               <Sparkles className="mr-1 h-4 w-4" />
@@ -1697,7 +1839,7 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
             </Button>
             <Button
               size="sm"
-              variant={showAdminPanel ? "secondary" : "ghost"}
+              variant={showAdminPanel ? "secondary" : "outline"}
               onClick={() => setShowAdminPanel((current) => !current)}
             >
               <ShieldCheck className="mr-1 h-4 w-4" />
@@ -1874,6 +2016,15 @@ export function PdfViewer({ sourceUrl }: PdfViewerProps) {
                   onSelectEditorElement={selectEditorElement}
                   onUpdateEditorElementRect={handleUpdateEditorElementRect}
                   onUpdateEditorElementValue={handleUpdateEditorElementValue}
+                  annotations={allCurrentDocumentAnnotations.filter(
+                    (item) => item.pageNumber === renderPageNumber,
+                  )}
+                  selectedAnnotationId={annotationSelectedId}
+                  activeAnnotationTool={annotationActiveTool}
+                  onCreateAnnotation={handleCreateAnnotation}
+                  onSelectAnnotation={selectAnnotation}
+                  onUpdateAnnotationRect={handleUpdateAnnotationRect}
+                  onUpdateAnnotationNoteText={handleUpdateAnnotationNoteText}
                 />
               </div>
               );

@@ -1,5 +1,8 @@
+"use client";
+
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { FileText, Layers, PenTool, Signature, TextCursorInput } from "lucide-react";
 
 import { AppShellHeader } from "@/components/layout/app-shell-header";
@@ -21,6 +24,8 @@ interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  const pathname = usePathname();
+
   return (
     <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
       <aside className="border-r border-zinc-200 bg-white px-4 py-5 dark:border-zinc-800 dark:bg-zinc-950">
@@ -38,16 +43,21 @@ export function AppShell({ children }: AppShellProps) {
           {appConfig.navigation.map((item) => {
             const Icon = navIcons[item.title] ?? FileText;
             const isDisabled = Boolean(item.disabled);
+            const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
 
             return (
               <Link
                 key={item.href}
                 href={isDisabled ? "#" : item.href}
                 aria-disabled={isDisabled}
+                aria-current={isActive && !isDisabled ? "page" : undefined}
                 className={cn(
                   "group flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors",
                   "hover:bg-zinc-100 dark:hover:bg-zinc-900",
                   isDisabled && "cursor-not-allowed opacity-50",
+                  isActive &&
+                    !isDisabled &&
+                    "bg-zinc-100 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-700",
                 )}
               >
                 <Icon className="mt-0.5 h-4 w-4 text-zinc-500 group-hover:text-zinc-900 dark:group-hover:text-zinc-100" />

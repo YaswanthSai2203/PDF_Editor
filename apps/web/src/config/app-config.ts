@@ -29,25 +29,21 @@ export const appConfig: AppConfig = {
       title: "Annotate",
       href: "/annotate",
       description: "Highlights, notes, and drawings",
-      disabled: true,
     },
     {
       title: "Organize",
       href: "/organize",
       description: "Reorder, rotate, and extract pages",
-      disabled: true,
     },
     {
       title: "Sign",
       href: "/sign",
       description: "Signature request workflows",
-      disabled: true,
     },
     {
       title: "Forms",
       href: "/forms",
       description: "Build and fill PDF forms",
-      disabled: true,
     },
   ],
   workspaces: [

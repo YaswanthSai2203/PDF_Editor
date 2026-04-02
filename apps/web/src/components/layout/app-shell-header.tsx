@@ -29,7 +29,17 @@ export function AppShellHeader() {
   }, [pathname]);
 
   const documentLabel =
-    pathname === "/viewer" ? "Viewer document" : "No document selected";
+    pathname === "/viewer"
+      ? "Viewer document"
+      : pathname === "/annotate"
+        ? "Annotating"
+        : pathname === "/organize"
+          ? "Organizing pages"
+          : pathname === "/sign"
+            ? "Signing"
+            : pathname === "/forms"
+              ? "Forms"
+              : "No document selected";
   const activeWorkspace =
     appConfig.workspaces.find((item) => item.id === appConfig.defaultWorkspaceId) ??
     appConfig.workspaces[0];

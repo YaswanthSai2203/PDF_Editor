@@ -25,6 +25,7 @@ export const askAiAssistantRequestSchema = z.object({
       counts: z
         .object({
           editorElements: z.number().int().min(0).optional(),
+          annotations: z.number().int().min(0).optional(),
           formFields: z.number().int().min(0).optional(),
           comments: z.number().int().min(0).optional(),
           versions: z.number().int().min(0).optional(),

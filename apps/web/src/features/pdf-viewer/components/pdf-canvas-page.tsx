@@ -3,6 +3,12 @@
 import { useEffect, useRef } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
+import { AnnotationOverlay } from "@/features/annotation/components/annotation-overlay";
+import type {
+  AnnotationEntity,
+  AnnotationKind,
+  AnnotationTool,
+} from "@/features/annotation/domain/annotation";
 import { EditorOverlay } from "@/features/editor/components/editor-overlay";
 import type {
   EditorElementEntity,
@@ -32,6 +38,17 @@ interface PdfCanvasPageProps {
   onSelectEditorElement?: (elementId: string | null) => void;
   onUpdateEditorElementRect?: (elementId: string, rect: EditorElementRect) => void;
   onUpdateEditorElementValue?: (elementId: string, value: string) => void;
+  annotations?: AnnotationEntity[];
+  selectedAnnotationId?: string | null;
+  activeAnnotationTool?: AnnotationTool;
+  onCreateAnnotation?: (
+    pageNumber: number,
+    kind: AnnotationKind,
+    rect: EditorElementRect,
+  ) => void;
+  onSelectAnnotation?: (annotationId: string | null) => void;
+  onUpdateAnnotationRect?: (annotationId: string, rect: EditorElementRect) => void;
+  onUpdateAnnotationNoteText?: (annotationId: string, noteText: string) => void;
 }
 
 export function PdfCanvasPage({
@@ -51,6 +68,13 @@ export function PdfCanvasPage({
   onSelectEditorElement,
   onUpdateEditorElementRect,
   onUpdateEditorElementValue,
+  annotations = [],
+  selectedAnnotationId = null,
+  activeAnnotationTool = "SELECT",
+  onCreateAnnotation,
+  onSelectAnnotation,
+  onUpdateAnnotationRect,
+  onUpdateAnnotationNoteText,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +150,22 @@ export function PdfCanvasPage({
             ref={textLayerRef}
             className="pointer-events-none absolute inset-0 rounded bg-transparent"
             aria-hidden="true"
+          />
+        ) : null}
+        {interactionMode === "annotate" &&
+        onCreateAnnotation &&
+        onSelectAnnotation &&
+        onUpdateAnnotationRect &&
+        onUpdateAnnotationNoteText ? (
+          <AnnotationOverlay
+            pageNumber={pageNumber}
+            annotations={annotations}
+            selectedAnnotationId={selectedAnnotationId}
+            activeTool={activeAnnotationTool}
+            onCreateAnnotation={onCreateAnnotation}
+            onSelectAnnotation={onSelectAnnotation}
+            onUpdateAnnotationRect={onUpdateAnnotationRect}
+            onUpdateAnnotationNoteText={onUpdateAnnotationNoteText}
           />
         ) : null}
         {interactionMode === "edit" &&
