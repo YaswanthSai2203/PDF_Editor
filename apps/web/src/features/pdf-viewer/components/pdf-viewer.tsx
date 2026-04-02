@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import {
   ShieldCheck,
@@ -118,6 +119,7 @@ import {
 } from "@/features/signature/services/signature-api";
 import { useSignatureStore } from "@/features/signature/services/signature-store";
 import { PdfJsLoaderService } from "@/features/pdf-viewer/services/pdf-loader.service";
+import { ensureDevWorkspaceDocument } from "@/features/pdf-viewer/services/dev-workspace-bootstrap";
 
 import { PdfCanvasPage } from "./pdf-canvas-page";
 import { PdfThumbnail } from "./pdf-thumbnail";
@@ -156,6 +158,24 @@ function deriveDocumentKey(source: string): { documentKey: string; documentId: s
   } catch {
     return { documentKey: source, documentId: null };
   }
+}
+
+function stripDocIdFromSourceUrl(source: string): string {
+  try {
+    const parsed = new URL(source, "https://viewer.local");
+    parsed.searchParams.delete("docId");
+    return parsed.toString();
+  } catch {
+    return source;
+  }
+}
+
+function getBootstrapSourceUrl(source: string): string {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("blob:")) {
+    return trimmed;
+  }
+  return stripDocIdFromSourceUrl(trimmed);
 }
 
 function buildWindow(center: number, total: number, radius: number): number[] {
@@ -239,13 +259,24 @@ export function PdfViewer({
   initialMode = "edit",
   initialPanel,
 }: PdfViewerProps) {
+  const router = useRouter();
   const loader = useMemo(() => new PdfJsLoaderService(), []);
   const [runtimeSourceUrl, setRuntimeSourceUrl] = useState<string>(sourceUrl);
   const [sourceInputValue, setSourceInputValue] = useState<string>(sourceUrl);
-  const { documentKey, documentId: persistedDocumentId } = useMemo(
+  const { documentKey, documentId: documentIdFromUrl } = useMemo(
     () => deriveDocumentKey(runtimeSourceUrl),
     [runtimeSourceUrl],
   );
+  const [provisionState, setProvisionState] = useState<{
+    documentKey: string;
+    documentId: string;
+  } | null>(null);
+  const [workspaceBootstrapError, setWorkspaceBootstrapError] = useState<
+    string | null
+  >(null);
+  const persistedDocumentId =
+    documentIdFromUrl ??
+    (provisionState?.documentKey === documentKey ? provisionState.documentId : null);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(initialMode);
   const [imageDraftUrl, setImageDraftUrl] = useState<string>("");
 
@@ -385,9 +416,70 @@ export function PdfViewer({
   const upsertEntitlement = useAdminStore((state) => state.upsertEntitlement);
 
   useEffect(() => {
-    setRuntimeSourceUrl(sourceUrl);
-    setSourceInputValue(sourceUrl);
+    setRuntimeSourceUrl((previous) => {
+      const prevBase = getBootstrapSourceUrl(previous).trim();
+      const nextBase = getBootstrapSourceUrl(sourceUrl).trim();
+      return prevBase !== nextBase ? sourceUrl : previous;
+    });
+    setSourceInputValue((previous) => {
+      const prevBase = getBootstrapSourceUrl(previous).trim();
+      const nextBase = getBootstrapSourceUrl(sourceUrl).trim();
+      return prevBase !== nextBase ? sourceUrl : previous;
+    });
   }, [sourceUrl]);
+
+  useEffect(() => {
+    if (documentIdFromUrl) {
+      setWorkspaceBootstrapError(null);
+      return;
+    }
+    if (provisionState?.documentKey === documentKey) {
+      return;
+    }
+    if (!pdfDocument) {
+      return;
+    }
+
+    let isCancelled = false;
+    const bootstrapSource = getBootstrapSourceUrl(runtimeSourceUrl);
+    setWorkspaceBootstrapError(null);
+
+    void ensureDevWorkspaceDocument({
+      sourceUrl: bootstrapSource,
+      pageCount: pdfDocument.numPages,
+    })
+      .then((documentId) => {
+        if (isCancelled) {
+          return;
+        }
+        setProvisionState({ documentKey, documentId });
+        if (typeof window !== "undefined") {
+          const path = window.location.pathname || "/viewer";
+          const params = new URLSearchParams(window.location.search);
+          params.set("docId", documentId);
+          router.replace(`${path}?${params.toString()}`);
+        }
+      })
+      .catch((err: unknown) => {
+        if (isCancelled) {
+          return;
+        }
+        setWorkspaceBootstrapError(
+          err instanceof Error ? err.message : "Workspace bootstrap failed.",
+        );
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    documentIdFromUrl,
+    documentKey,
+    pdfDocument,
+    provisionState?.documentKey,
+    router,
+    runtimeSourceUrl,
+  ]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -2208,8 +2300,23 @@ export function PdfViewer({
           </div>
         ) : null}
 
+        {workspaceBootstrapError ? (
+          <div className="absolute inset-x-4 top-4 z-20 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            Workspace: {workspaceBootstrapError} (Start PostgreSQL and run{" "}
+            <code className="rounded bg-amber-100 px-1 dark:bg-amber-900/60">
+              npx prisma migrate deploy
+            </code>{" "}
+            in <code className="rounded bg-amber-100 px-1 dark:bg-amber-900/60">apps/web</code>.)
+          </div>
+        ) : null}
+
         {error ? (
-          <div className="absolute inset-x-4 top-4 z-20 rounded-md border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+          <div
+            className={cn(
+              "absolute inset-x-4 z-20 rounded-md border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+              workspaceBootstrapError ? "top-28" : "top-4",
+            )}
+          >
             Viewer error: {error}
           </div>
         ) : null}

@@ -19,6 +19,21 @@ npm run dev
 
 Open `http://localhost:3000/viewer`.
 
+### Database (required for saved edits, OCR, forms, signatures, etc.)
+
+The app uses PostgreSQL via Prisma. Default connection (override with `DATABASE_URL`):
+
+`postgresql://postgres:postgres@localhost:5432/pdf_editor`
+
+```bash
+# from apps/web
+npx prisma migrate deploy
+```
+
+After Postgres is running and migrations are applied, opening the viewer **without** `docId` will auto-create a workspace document and add `docId` to the URL so API-backed features work.
+
+In **production**, the auto-bootstrap endpoint is off unless you set `ALLOW_DEV_WORKSPACE_BOOTSTRAP=true` (use real document provisioning instead).
+
 ## Available scripts
 
 ```bash
