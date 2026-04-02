@@ -9,7 +9,7 @@
     "lint": "eslint app src scripts next.config.ts eslint.config.mjs --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "postinstall": "node scripts/copy-pdf-worker.mjs"
+    "postinstall": "prisma generate && node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.6.0",
